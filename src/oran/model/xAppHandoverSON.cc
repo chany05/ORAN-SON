@@ -17,12 +17,12 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
     : xAppHandover(),
       m_sonPeriodicitySec(sonPeriodicitySec),
       m_initiateHandovers(initiateHandovers),
-      m_cellRadius(500.0),
+      m_cellRadius(30.0),
       m_edgeThreshold(0.7),
-      m_loadThreshold(10.0),
-      m_rsrqThreshold(-10.0),
-      m_cqiThreshold(6.0),
-      m_txPower(30.0),
+      m_loadThreshold(1.0),
+      m_rsrqThreshold(-1.0),
+      m_cqiThreshold(1.0),
+      m_txPower(40.0),
       m_frequency(2.0e9)
 {
 
@@ -370,9 +370,9 @@ xAppHandoverSON::CalculateLoadScores()
 
     for (auto& [cellId, cell] : m_cellContexts)
     {
-        cell.loadScore = cell.ueCount * 1.0
-                       + cell.edgeUeCount * 1.5
-                       - cell.avgCqi * 0.5;
+        cell.loadScore = cell.ueCount * 2.0
+                       + cell.edgeUeCount * 3.0
+                       - cell.avgCqi * 0.0;
     }
 }
 
