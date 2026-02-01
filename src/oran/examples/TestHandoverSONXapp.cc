@@ -81,7 +81,7 @@ main()
     double distance = 200.0; // m
     double yForUe = 500.0;   // m
     double speed = 1;        // 20;                                              // m/s
-    double enbTxPowerDbm = 1.0;
+    double enbTxPowerDbm = 46.0;
 
     // change some default attributes so that they are reasonable for
     // this scenario, but do this before processing command line
