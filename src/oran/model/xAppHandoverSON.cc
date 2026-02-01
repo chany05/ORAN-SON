@@ -13,7 +13,7 @@ using namespace oran;
 
 NS_LOG_COMPONENT_DEFINE("xAppHandoverSON");
 
-xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers)
+xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers) ////여기서 각 파라미터 조정, m_loadThreshold 등의 파라미터를 RL을 통해 나온 값으로 대체하면 됨
     : xAppHandover(),
       m_sonPeriodicitySec(sonPeriodicitySec),
       m_initiateHandovers(initiateHandovers),
@@ -52,6 +52,22 @@ xAppHandoverSON::PeriodicSONCheck()
 
     // 1. KPM 수집
     CollectKPMs();
+
+    // ===== 디버그: 수집된 데이터 출력 =====
+    NS_LOG_UNCOND("[SON] === Periodic Check === UEs=" << m_ueContexts.size()
+        << " Cells=" << m_cellContexts.size());
+
+    for (auto& [key, ue] : m_ueContexts)
+    {
+        NS_LOG_UNCOND("[SON]   UE RNTI=" << ue.rnti
+            << " Cell=" << ue.servingCellId
+            << " RSRP=" << ue.servingRsrp
+            << " RSRQ=" << ue.servingRsrq
+            << " CQI=" << ue.cqi
+            << " DL=" << ue.throughputDl << "kbps"
+            << " UL=" << ue.throughputUl << "kbps");
+    }
+    // ===== 디버그 끝 =====
 
     // 2. Edge UE 계산
     CalculateEdgeUEs();
@@ -335,6 +351,7 @@ xAppHandoverSON::IsCellOverloaded(uint16_t cellId)
 // =============================================================================
 // 의사결정
 // =============================================================================
+
 uint16_t
 xAppHandoverSON::MakeSONDecision(UeKey key)
 {
@@ -353,14 +370,14 @@ xAppHandoverSON::MakeSONDecision(UeKey key)
         return FindLeastLoadedNeighbor(key);
     }
 
-    // 조건 2: RSRQ 불량
+    // 조건 2: RSRQ 불량 ->> 뭔가 여기서 핑퐁 발생할것 같은 느낌
     if (ue.servingRsrq < m_rsrqThreshold)
     {
         NS_LOG_INFO("SON: RSRQ handover triggered for RNTI " << ue.rnti);
         return FindBestRsrqCell(key);
     }
 
-    // 조건 3: CQI 불량
+    // 조건 3: CQI 불량 -> 여기도 핑퐁 위험
     if (ue.cqi < m_cqiThreshold && ue.cqi > 0)
     {
         NS_LOG_INFO("SON: CQI handover triggered for RNTI " << ue.rnti);
