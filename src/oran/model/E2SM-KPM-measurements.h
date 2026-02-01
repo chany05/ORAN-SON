@@ -344,10 +344,10 @@ const std::map<std::string, std::tuple<enum MeasurementType, std::string, enum F
          {INTEGER, "", NOTIMPLEMENTED}}, // LAI = LA Identifier of RAT serving UE from
                                          // RRCConnectionSetupComplete 4.10 RF Measurements
                                          // 4.10.1 CQI Distribution
-        ///////////////////////////////////////////////////////////////////////////////
+                                         
         {"CARR.WBCQIDist.Bin", {INTEGER, "", IMPLEMENTED}},   // Bin = CQI value 0-15
         {"CARR.AvgSubCQI.SubbandX", {REAL, "", NOTIMPLEMENTED}}, // X = subband index
-        ///////////////////////////////////////////////////////////////////////////////////////////
+
         // 4.10.2 Timing Advance Distribution
         // SKIPPING DUE TO IT BEING CONFUSING
         // https://www.sharetechnote.com/html/Handbook_LTE_ServCellID_SCellID.html

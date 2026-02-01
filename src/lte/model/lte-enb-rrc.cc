@@ -1429,7 +1429,8 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
             Json json;
             json["MEASID"] = msg.measResults.measId;
             json["RNTI"] = m_rnti;
-            json["CELLID"] = m_sourceCellId; // starts counting from 1
+            //json["CELLID"] = m_sourceCellId; // starts counting from 1
+            json["CELLID"] = m_rrc->ComponentCarrierToCellId(m_componentCarrierId); // starts counting from 0
             json["VALUE"] = msg.measResults.measResultPCell.rsrpResult;
             e2ap->PublishToEndpointSubscribers("/KPM/HO.SrcCellQual.RSRP", json);
             json["VALUE"] = msg.measResults.measResultPCell.rsrqResult;
