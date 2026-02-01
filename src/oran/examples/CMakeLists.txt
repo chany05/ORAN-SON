@@ -53,7 +53,17 @@ build_lib_example(
         ${liboran}
         ${libapplications}
 )
-
+build_lib_example(
+        NAME TestHandoverSONXapp
+        SOURCE_FILES TestHandoverSONXapp.cc
+        LIBRARIES_TO_LINK
+        ${libcore}
+        ${libmobility}
+        ${libpoint-to-point}
+        ${liblte}
+        ${liboran}
+        ${libapplications}
+)
 if(NOT(${ARMADILLO} STREQUAL ARMADILLO-NOTFOUND) AND NOT(${MLPACK} STREQUAL MLPACK-NOTFOUND))
     build_lib_example(
             NAME TestHandoverXappMLPACK
@@ -91,6 +101,18 @@ if(NOT(${ARMADILLO} STREQUAL ARMADILLO-NOTFOUND) AND NOT(${MLPACK} STREQUAL MLPA
             ${libapplications}
             ${libnetanim}
             IGNORE_PCH TRUE
+    )
+    build_lib_example(
+        NAME TestCqiKpm
+        SOURCE_FILES TestCqiKpm.cc
+        LIBRARIES_TO_LINK
+        ${libcore}
+        ${libmobility}
+        ${libpoint-to-point}
+        ${liblte}
+        ${liboran}
+        ${libapplications}
+        ${libinternet}
     )
     target_compile_options(TestHandoverXappMLPACK PUBLIC -fopenmp)
     target_compile_options(TestHandoverXappMLPACKReinforcedLearning PUBLIC -fopenmp)

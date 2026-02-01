@@ -7,6 +7,22 @@
 
 #include <ns3/lte-enb-rrc.h>
 
+static inline uint16_t
+ParseCellIdFromEndpoint(const std::string& endpoint)
+{
+    std::string s = endpoint;
+    if (!s.empty() && s.back() == '/')
+    {
+        s.pop_back();
+    }
+    auto pos = s.find_last_of('/');
+    if (pos == std::string::npos || pos + 1 >= s.size())
+    {
+        return 0;
+    }
+    return static_cast<uint16_t>(std::atoi(s.substr(pos + 1).c_str()));
+}
+
 void
 E2AP::HandleE2SmRcIndicationPayload(std::string& src_endpoint,
                                     std::string& dest_endpoint,
@@ -125,6 +141,10 @@ E2AP::HandleE2SmRcIndicationPayload(std::string& src_endpoint,
                     Json temp;
                     temp["RNTI"] = ueToHandover;
                     temp["Target Primary Cell ID"] = requestedTargetCell;
+                     // === ADD (2 lines) ===
+		    temp["SRC_ENDPOINT"] = src_endpoint;
+		    temp["Source Primary Cell ID"] = ParseCellIdFromEndpoint(src_endpoint);
+		    // =====================
                     handoverHandler(temp);
                     targetCell = temp["Target Primary Cell ID"];
                 }
@@ -337,15 +357,22 @@ E2AP::HandleE2SmRcControlRequest(std::string& src_endpoint,
                     handoverTriggeringTrace(rrc, rnti, cellId);
 
                     if (cellId != std::numeric_limits<uint16_t>::max())
-                    {
-                        GetRrc()->DoTriggerHandover(controlHeader.contents.format_1.RNTI, cellId);
-                    }
-                    else
-                    {
-                        // Trace the handover cancelling
-                        handoverCancelledTrace(rrc, rnti, cellId);
-                    }
-                }
+{
+    // IMSI=MAX 상황의 근본 원인: UE manager가 없음
+    if (!rrc->HasUeManager(rnti))
+    {
+        NS_LOG_WARN(GetRootEndpoint()
+                    << " drop RIC HO control: no UE manager for RNTI=" << rnti
+                    << " targetCellId=" << cellId);
+        return;
+    }
+    rrc->DoTriggerHandover(rnti, cellId);
+}
+else
+{
+    handoverCancelledTrace(rrc, rnti, cellId);
+}
+}
                 else
                 {
                     UeRntiIt->second = payload;
@@ -545,3 +572,6 @@ E2AP::E2SmRcHandoverControl(uint16_t rnti, uint16_t cellId, LteEnbRrc& rrc)
     cellId = ricControlRequest["MESSAGE"]["Target Primary Cell ID"];
     return cellId;
 }
+
+
+

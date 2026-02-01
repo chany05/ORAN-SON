@@ -321,7 +321,7 @@ NotifyHandoverEndErrorUe(std::string context, uint64_t imsi, uint16_t cellid, ui
  * \return a good seed
  */
 unsigned int
-good_seed()
+good_seed()//ssdsdsdsd
 {
     unsigned int random_seed, random_seed_a, random_seed_b;
     std::ifstream file("/dev/urandom", std::ios::binary);
@@ -733,7 +733,7 @@ main(int argc, char** argv)
         Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, e2n3);
         Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, e2t, *e2n3);
     }
-    /*
+    
     AnimationInterface anim("anim.xml");
     //anim.SetMaxPktsPerTraceFile(0xFFFFFFFF);
     anim.EnablePacketMetadata(false);
@@ -769,7 +769,7 @@ main(int argc, char** argv)
         anim.UpdateNodeColor(nodeId, 0, 255, 0);
         anim.UpdateNodeSize(nodeId, 80, 80);
     }
-    */
+    
     // Ptr<FlowMonitor> flowMonitor;
     // FlowMonitorHelper flowHelper;
     // flowMonitor = flowHelper.InstallAll();

@@ -48,6 +48,13 @@ class LtePdcp : public Object // SimpleRefCount<LtePdcp>
      */
     static TypeId GetTypeId();
     void DoDispose() override;
+    /**
+     *
+     * \return the total number of transmitted bytes
+     */
+    uint64_t GetTxBytes() const;
+    uint64_t GetRxBytes() const;
+    void ResetByteCounters();
 
     /**
      *
@@ -189,6 +196,8 @@ class LtePdcp : public Object // SimpleRefCount<LtePdcp>
      * Constants. See section 7.2 in TS 36.323
      */
     static const uint16_t m_maxPdcpSn = 4095;
+    uint64_t m_txByteCounter{0};
+    uint64_t m_rxByteCounter{0};
 };
 
 } // namespace ns3

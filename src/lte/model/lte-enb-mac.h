@@ -78,6 +78,19 @@ class LteEnbMac : public Object
     ~LteEnbMac() override;
     void DoDispose() override;
 
+    /**                                                     // <-- 추가 시작
+     * \brief Get the latest DL CQI received list
+     * \return reference to vector of CqiListElement_s
+     */
+    const std::vector<CqiListElement_s>& GetDlCqiReceived() const;
+
+    /**                                                          // <-- 추가 시작
+     * \brief Get the last known WB CQI for a given RNTI
+     * \param rnti the UE identifier
+     * \return CQI value (0-15), or -1 if not found
+     */
+    int GetLastWbCqi(uint16_t rnti) const;                       // <-- 추가 끝
+    
     /**
      * \brief Set the component carrier ID
      * \param index the component carrier ID
@@ -461,6 +474,9 @@ class LteEnbMac : public Object
 
     /// component carrier Id used to address sap
     uint8_t m_componentCarrierId;
+
+    /// Last known WB CQI per RNTI                               // <-- 추가
+    std::map<uint16_t, uint8_t> m_lastWbCqiPerRnti;              // <-- 추가
 };
 
 } // end namespace ns3

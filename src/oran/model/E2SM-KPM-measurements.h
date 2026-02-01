@@ -279,8 +279,12 @@ const std::map<std::string, std::tuple<enum MeasurementType, std::string, enum F
         {"SRB.PdcpSduBitrateDl.QCI", {INTEGER, "", NOTIMPLEMENTED}},    // control plane
         {"SRB.PdcpSduBitrateUl.QCI", {INTEGER, "", NOTIMPLEMENTED}},    // control plane
                                                                         // 4.4.2 Active UEs
-        {"DRB.UEActiveDl.QCI", {INTEGER, "", NOTIMPLEMENTED}},
-        {"DRB.UEActiveUl.QCI", {INTEGER, "", NOTIMPLEMENTED}},
+        /////////////////////////////////////////////////////////////////////////////////////////////////////
+        {"DRB.UEActiveDl.QCI", {INTEGER, "", IMPLEMENTED}}, // number of active UEs per QCI -> SON을 위한 KPM
+        {"DRB.UEActiveUl.QCI", {INTEGER, "", IMPLEMENTED}}, // number of active UEs per QCI -> SON을 위한 KPM
+        /////////////////////////////////////////////////////////////////////////////////////////////////////
+        {"SRB.UEActiveDl", {INTEGER, "", NOTIMPLEMENTED}}, // control plane
+        {"SRB.UEActiveUl", {INTEGER, "", NOTIMPLEMENTED}}, // control plane
         // 4.4.3 Packet Delay And Drop Rate
         {"DRB.PdcpSduDelayDl.QCI", {INTEGER, "", NOTIMPLEMENTED}},
         {"DRB.PdcpSduDropRateDl.QCI", {INTEGER, "", NOTIMPLEMENTED}},
@@ -291,8 +295,8 @@ const std::map<std::string, std::tuple<enum MeasurementType, std::string, enum F
                                          // 4.4.5 IP Latency Measurements
         {"DRB.IpLateDl.QCI", {INTEGER, "ms", NOTIMPLEMENTED}},
         // 4.4.6 IP Throughput Measurements
-        {"DRB.IpThpDl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
-        {"DRB.IpThpUl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
+        {"DRB.IpThpDl.QCI", {INTEGER, "kbps", IMPLEMENTED}},
+        {"DRB.IpThpUl.QCI", {INTEGER, "kbps", IMPLEMENTED}},
         {"DRB.IpVolDl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
         {"DRB.IpVolUl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
         {"DRB.IpTimeDl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
@@ -340,8 +344,10 @@ const std::map<std::string, std::tuple<enum MeasurementType, std::string, enum F
          {INTEGER, "", NOTIMPLEMENTED}}, // LAI = LA Identifier of RAT serving UE from
                                          // RRCConnectionSetupComplete 4.10 RF Measurements
                                          // 4.10.1 CQI Distribution
-        {"CARR.WBCQIDist.Bin", {INTEGER, "", NOTIMPLEMENTED}},   // Bin = CQI value 0-15
+        ///////////////////////////////////////////////////////////////////////////////
+        {"CARR.WBCQIDist.Bin", {INTEGER, "", IMPLEMENTED}},   // Bin = CQI value 0-15
         {"CARR.AvgSubCQI.SubbandX", {REAL, "", NOTIMPLEMENTED}}, // X = subband index
+        ///////////////////////////////////////////////////////////////////////////////////////////
         // 4.10.2 Timing Advance Distribution
         // SKIPPING DUE TO IT BEING CONFUSING
         // https://www.sharetechnote.com/html/Handbook_LTE_ServCellID_SCellID.html

@@ -401,6 +401,12 @@ LteEnbMac::DoDispose()
     delete m_ccmMacSapProvider;
 }
 
+const std::vector<CqiListElement_s>&
+LteEnbMac::GetDlCqiReceived() const
+{
+    return m_dlCqiReceived;
+}
+
 void
 LteEnbMac::SetComponentCarrierId(uint8_t index)
 {
@@ -686,6 +692,23 @@ LteEnbMac::ReceiveDlCqiLteControlMessage(Ptr<DlCqiLteControlMessage> msg)
     NS_LOG_LOGIC(this << "Enb Received DL-CQI rnti" << dlcqi.m_rnti);
     NS_ASSERT(dlcqi.m_rnti != 0);
     m_dlCqiReceived.push_back(dlcqi);
+
+    // [추가] 마지막 WB CQI 저장                                  // <-- 추가 시작
+    if (!dlcqi.m_wbCqi.empty())
+    {
+        m_lastWbCqiPerRnti[dlcqi.m_rnti] = dlcqi.m_wbCqi.at(0);
+    }                                                             // <-- 추가 끝
+}
+
+int
+LteEnbMac::GetLastWbCqi(uint16_t rnti) const
+{
+    auto it = m_lastWbCqiPerRnti.find(rnti);
+    if (it != m_lastWbCqiPerRnti.end())
+    {
+        return (int)it->second;
+    }
+    return -1;
 }
 
 void

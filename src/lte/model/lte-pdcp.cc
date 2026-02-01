@@ -196,6 +196,7 @@ LtePdcp::DoTransmitPdcpSdu(LtePdcpSapProvider::TransmitPdcpSduParameters params)
     p->AddByteTag(pdcpTag, 1, pdcpHeader.GetSerializedSize());
 
     m_txPdu(m_rnti, m_lcid, p->GetSize());
+    m_txByteCounter += p->GetSize();           // 추가
 
     LteRlcSapProvider::TransmitPdcpPduParameters txParams;
     txParams.rnti = m_rnti;
@@ -216,6 +217,7 @@ LtePdcp::DoReceivePdu(Ptr<Packet> p)
     p->FindFirstMatchingByteTag(pdcpTag);
     delay = Simulator::Now() - pdcpTag.GetSenderTimestamp();
     m_rxPdu(m_rnti, m_lcid, p->GetSize(), delay.GetNanoSeconds());
+    m_rxByteCounter += p->GetSize();           // 추가
 
     LtePdcpHeader pdcpHeader;
     p->RemoveHeader(pdcpHeader);
@@ -232,6 +234,24 @@ LtePdcp::DoReceivePdu(Ptr<Packet> p)
     params.rnti = m_rnti;
     params.lcid = m_lcid;
     m_pdcpSapUser->ReceivePdcpSdu(params);
+}
+uint64_t
+LtePdcp::GetTxBytes() const
+{
+    return m_txByteCounter;
+}
+
+uint64_t
+LtePdcp::GetRxBytes() const
+{
+    return m_rxByteCounter;
+}
+
+void
+LtePdcp::ResetByteCounters()
+{
+    m_txByteCounter = 0;
+    m_rxByteCounter = 0;
 }
 
 } // namespace ns3

@@ -8,12 +8,12 @@
 #include "ns3/lte-module.h"
 #include "ns3/mobility-module.h"
 #include "ns3/point-to-point-module.h"
-#include "ns3/xAppHandover.h"
+#include "ns3/xAppHandoverSON.h"
 
 #include <map>
 #include <string>
 
-NS_LOG_COMPONENT_DEFINE("TestHandoverXapp");
+NS_LOG_COMPONENT_DEFINE("TestHandoverSONXapp");
 
 using namespace ns3;
 using namespace oran;
@@ -317,12 +317,12 @@ main()
     NS_ASSERT(E2AP::RetrieveInstanceWithEndpoint("/E2Node/0") == static_cast<PubSubInfra*>(&e2t));
 
     // Create the handover xApp
-    xAppHandover handoverxapp;
+    xAppHandoverSON sonxapp(1.0, true);  // 주기 1초, 자체 핸드오버 비활성화
 
     // Depois de instalar aplicações, conseguiremos obter seus endereços de IP para
     // estabelecer os sockets TCP
     sgw->AddApplication(&e2t);
-    sgw->AddApplication(&handoverxapp);
+    sgw->AddApplication(&sonxapp);
 
     // Configurar eNodeBs/nós E2
     enbNodes.Get(0)->AddApplication(&e2n1);

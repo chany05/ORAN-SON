@@ -43,6 +43,9 @@
 #include <ns3/packet.h>
 #include <ns3/pointer.h>
 #include <ns3/simulator.h>
+#include <ns3/component-carrier-enb.h>      // <-- 추가
+#include <ns3/lte-enb-mac.h>       // <-- 추가
+#include <ns3/lte-pdcp.h>      // <-- 추가
 
 namespace ns3
 {
@@ -1444,6 +1447,91 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
                     json["VALUE"] = cell.rsrqResult;
                     json["TARGET"] = cell.physCellId; // starts counting from 1
                     e2ap->PublishToEndpointSubscribers("/KPM/HO.TrgtCellQual.RSRQ", json);
+                }
+            }
+            // 새로 추가된 부분
+            Json ueCountJson;
+            ueCountJson["CELLID"] = m_rrc->ComponentCarrierToCellId(m_componentCarrierId);  // 셀 ID
+            ueCountJson["VALUE"] = m_rrc->m_ueMap.size();  // UE 수 (m_ueMap은 연결된 UE 목록)
+            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveDl.QCI", ueCountJson);
+            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveUl.QCI", ueCountJson);
+
+            // [추가] 디버그 로그
+            // NS_LOG_UNCOND("[KPM] UEActiveDl - CELLID=" << ueCountJson["CELLID"]
+            //            << " | UE_COUNT=" << ueCountJson["VALUE"]);
+            // ============================================================
+            // [추가] CQI KPM 발행 (MAC에서 실제 CQI 조회)
+            // ============================================================
+            // ============================================================
+            // [추가] CQI KPM 발행 (MAC에서 마지막 CQI 조회)
+            // ============================================================
+            {
+                auto ccIt = m_rrc->m_componentCarrierPhyConf.find(m_componentCarrierId);
+                if (ccIt != m_rrc->m_componentCarrierPhyConf.end())
+                {
+                    auto ccEnb = DynamicCast<ComponentCarrierEnb>(ccIt->second);
+                    if (ccEnb)
+                    {
+                        auto mac = ccEnb->GetMac();
+                        int cqi = mac->GetLastWbCqi(m_rnti);
+
+                        if (cqi >= 0)
+                        {
+                            Json cqiJson;
+                            cqiJson["RNTI"] = m_rnti;
+                            cqiJson["CELLID"] = m_rrc->ComponentCarrierToCellId(
+                                m_componentCarrierId);
+                            cqiJson["VALUE"] = cqi;
+                            e2ap->PublishToEndpointSubscribers(
+                                "/KPM/CARR.WBCQIDist.Bin", cqiJson);
+
+                            NS_LOG_UNCOND("[KPM] CQI - RNTI=" << m_rnti
+                                << " | CELLID="
+                                << m_rrc->ComponentCarrierToCellId(m_componentCarrierId)
+                                << " | CQI=" << cqi);
+                        }
+                        else
+                        {
+                            NS_LOG_UNCOND("[DEBUG] No CQI yet for RNTI=" << m_rnti);
+                        }
+                    }
+                }
+            }
+            // Throughput KPM
+            {
+                uint64_t totalTxBytes = 0;
+                uint64_t totalRxBytes = 0;
+
+                for (auto& [drbId, drbInfo] : m_drbMap)
+                {
+                    if (drbInfo && drbInfo->m_pdcp)
+                    {
+                        totalTxBytes += drbInfo->m_pdcp->GetTxBytes();
+                        totalRxBytes += drbInfo->m_pdcp->GetRxBytes();
+                        drbInfo->m_pdcp->ResetByteCounters();
+                    }
+                }
+
+                if (totalTxBytes > 0 || totalRxBytes > 0)
+                {
+                    double intervalSec = 0.48;
+                    double dlKbps = (totalTxBytes * 8.0) / 1000.0 / intervalSec;
+                    double ulKbps = (totalRxBytes * 8.0) / 1000.0 / intervalSec;
+
+                    Json tputJson;
+                    tputJson["RNTI"] = m_rnti;
+                    tputJson["CELLID"] = m_rrc->ComponentCarrierToCellId(m_componentCarrierId);
+
+                    tputJson["VALUE"] = (int)dlKbps;
+                    e2ap->PublishToEndpointSubscribers("/KPM/DRB.IpThpDl.QCI", tputJson);
+
+                    tputJson["VALUE"] = (int)ulKbps;
+                    e2ap->PublishToEndpointSubscribers("/KPM/DRB.IpThpUl.QCI", tputJson);
+
+                    NS_LOG_UNCOND("[KPM] Throughput - RNTI=" << m_rnti
+                        << " | CELLID=" << m_rrc->ComponentCarrierToCellId(m_componentCarrierId)
+                        << " | DL=" << (int)dlKbps << "kbps"
+                        << " | UL=" << (int)ulKbps << "kbps");
                 }
             }
         }
