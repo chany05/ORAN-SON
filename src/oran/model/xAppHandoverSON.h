@@ -23,6 +23,7 @@ struct UEContext
     double throughputDl;
     double throughputUl;
     bool isEdge;
+    std::map<uint16_t, double> neighborRsrq;  // targetCellId → RSRQ
 };
 
 struct CellContext
@@ -91,6 +92,7 @@ class xAppHandoverSON : public xAppHandover
     uint16_t MakeSONDecision(UeKey key);
     uint16_t FindLeastLoadedNeighbor(UeKey key);
     uint16_t FindBestRsrqCell(UeKey key);
+    void CollectTargetRsrq();
 
     // 상태 저장
     std::map<UeKey, UEContext> m_ueContexts;

@@ -85,14 +85,14 @@ xAppHandoverSON::PeriodicSONCheck()
             if (m_imsiInHandover.find(key) != m_imsiInHandover.end())
                 continue;
 
-            uint16_t targetCell = MakeSONDecision(key);
+            uint16_t targetCell = MakeSONDecision(key); //키값은 servingCellId와 rnti로 구성되어 있음 -> 두 연결 구성의 고유 식별 번호
 
             if (targetCell != std::numeric_limits<uint16_t>::max() &&
                 targetCell != ue.servingCellId)
             {
                 std::string srcEndpoint = "/E2Node/" + std::to_string(ue.servingCellId) + "/";
                 ric->E2SmRcSendHandoverControlRequest(ue.rnti, targetCell, srcEndpoint);
-                m_imsiInHandover.emplace(key, 0);
+                m_imsiInHandover.emplace(key, 0); //더미데이터를 넣음으로써 핸드오버 중복 실행 방지 -> 얘는 건들이지 말란뜻
 
                 NS_LOG_UNCOND("[SON] Handover initiated RNTI=" << ue.rnti
                     << " from Cell=" << ue.servingCellId
@@ -117,6 +117,7 @@ xAppHandoverSON::CollectKPMs()
     m_cellContexts.clear();
 
     CollectRsrpRsrq();
+    CollectTargetRsrq();   // 추가
     CollectCqi();
     CollectThroughput();
     CollectUeCount();
@@ -178,6 +179,42 @@ xAppHandoverSON::CollectRsrpRsrq()
             if (m_ueContexts.find(key) != m_ueContexts.end())
             {
                 m_ueContexts[key].servingRsrq = measurement.measurements["VALUE"];
+            }
+        }
+    }
+}
+
+void
+xAppHandoverSON::CollectTargetRsrq()
+{
+    NS_LOG_FUNCTION(this);
+    E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
+
+    auto rsrqMap = ric->QueryKpmMetric("/KPM/HO.TrgtCellQual.RSRQ");
+    for (auto& e2nodeMeasurements : rsrqMap)
+    {
+        std::string mostRecentTimestamp("");
+        for (auto& measurement : e2nodeMeasurements.second)
+        {
+            if (mostRecentTimestamp.empty())
+                mostRecentTimestamp = measurement.timestamp;
+            if (mostRecentTimestamp != measurement.timestamp)
+                continue;
+
+            if (!measurement.measurements.contains("RNTI") ||
+                !measurement.measurements.contains("CELLID") ||
+                !measurement.measurements.contains("TARGET"))
+                continue;
+
+            uint16_t rnti = measurement.measurements["RNTI"];
+            uint16_t cellId = measurement.measurements["CELLID"];
+            uint16_t targetCellId = measurement.measurements["TARGET"];
+            double rsrq = measurement.measurements["VALUE"];
+
+            UeKey key = MakeUeKey(cellId, rnti);
+            if (m_ueContexts.find(key) != m_ueContexts.end())
+            {
+                m_ueContexts[key].neighborRsrq[targetCellId] = rsrq;
             }
         }
     }
@@ -417,9 +454,33 @@ xAppHandoverSON::FindBestRsrqCell(UeKey key)
 {
     NS_LOG_FUNCTION(this);
 
-    // TODO: Target Cell RSRQ 데이터 활용하여 구현
-    // 현재는 least loaded neighbor로 대체
-    return FindLeastLoadedNeighbor(key);
+    auto ueIt = m_ueContexts.find(key);
+    if (ueIt == m_ueContexts.end())
+        return std::numeric_limits<uint16_t>::max();
+
+    UEContext& ue = ueIt->second;
+
+    // 이웃 셀 RSRQ 데이터가 없으면 fallback
+    if (ue.neighborRsrq.empty())
+        return FindLeastLoadedNeighbor(key);
+
+    uint16_t bestCell = std::numeric_limits<uint16_t>::max();
+    double bestRsrq = -std::numeric_limits<double>::max();
+
+    for (auto& [targetCellId, rsrq] : ue.neighborRsrq)
+    {
+        if (rsrq > bestRsrq)
+        {
+            bestRsrq = rsrq;
+            bestCell = targetCellId;
+        }
+    }
+
+    // 타겟 RSRQ가 현재 서빙 셀보다 나아야 핸드오버 의미가 있음
+    if (bestRsrq <= ue.servingRsrq)
+        return std::numeric_limits<uint16_t>::max();
+
+    return bestCell;
 }
 
 // =============================================================================
