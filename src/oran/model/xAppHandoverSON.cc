@@ -17,13 +17,13 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
     : xAppHandover(),
       m_sonPeriodicitySec(sonPeriodicitySec),
       m_initiateHandovers(initiateHandovers),
-      m_cellRadius(30.0),
-      m_edgeThreshold(0.7),
-      m_loadThreshold(1.0),
-      m_rsrqThreshold(20.0),
-      m_cqiThreshold(10.1),
-      m_txPower(30.0),
-      m_frequency(2.0e9)
+      m_cellRadius(40.0),
+      m_edgeThreshold(0.8),
+      m_loadThreshold(3.0),
+      m_rsrqThreshold(-15.0),
+      m_cqiThreshold(11),
+      m_txPower(46.0),
+      m_frequency(2.12e9)
 {
 
     NS_LOG_FUNCTION(this);
