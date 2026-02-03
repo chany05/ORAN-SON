@@ -416,7 +416,7 @@ main()
     // ★ UE 12개 전부 eNB1에 강제 연결 (극단적 과부하)
     for (uint16_t i = 0; i < numberOfUes; i++) {
     Ptr<NetDevice> ueDev = ueLteDevs.Get(i);
-    Ptr<NetDevice> enbDev = enbLteDevs.Get(0);
+    Ptr<NetDevice> enbDev = enbLteDevs.Get(1);
     Simulator::Schedule(Seconds(0.5 * i), [lteHelper, ueDev, enbDev]() {
         lteHelper->Attach(ueDev, enbDev);
     });
