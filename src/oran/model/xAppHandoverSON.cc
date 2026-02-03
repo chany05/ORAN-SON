@@ -20,9 +20,9 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
       m_cellRadius(30.0),
       m_edgeThreshold(0.7),
       m_loadThreshold(1.0),
-      m_rsrqThreshold(-1.0),
-      m_cqiThreshold(1.0),
-      m_txPower(40.0),
+      m_rsrqThreshold(20.0),
+      m_cqiThreshold(10.1),
+      m_txPower(30.0),
       m_frequency(2.0e9)
 {
 

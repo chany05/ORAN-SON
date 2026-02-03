@@ -427,7 +427,6 @@ E2AP::E2SmRcSendHandoverControlRequest(uint16_t rnti, uint16_t targetCell, std::
         CONNECTED_MODE_MOBILITY_CONTROL_REQUEST::HANDOVER_CONTROL_REQUEST::VALUE;
     Json json_hdr;
     to_json(json_hdr, hdr);
-
     Json HANDOVER_CONTROL_REQUEST_MSG;
     HANDOVER_CONTROL_REQUEST_MSG["DEST_ENDPOINT"] = "/E2Node/0";
     HANDOVER_CONTROL_REQUEST_MSG["PAYLOAD"]["TYPE"] = RIC_INDICATION;
