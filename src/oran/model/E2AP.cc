@@ -568,7 +568,7 @@ E2AP::PublishToEndpointSubscribers(std::string endpoint, Json json)
     auto endpointIt = RetrieveSubscribersOfEndpoint(endpoint);
     if (!endpointIt.has_value())
     {
-        // NS_LOG_FUNCTION(this << "Endpoint not subscribed:" << complete_endpoint);
+        NS_LOG_FUNCTION(this << "Endpoint not subscribed:" << endpoint);
         return;
     }
 
@@ -585,6 +585,10 @@ E2AP::PublishToEndpointSubscribers(std::string endpoint, Json json)
     auto periodicMeasurement =
         PeriodicMeasurementStruct{SystemWallClockTimestamp().ToString(), json};
     it->second.measurements.push_front(periodicMeasurement);
+    NS_LOG_UNCOND("[E2AP] " << json["MEASID"] << " | RNTI=" << json["RNTI"] << " | CELLID=" << json["CELLID"]
+                                 << " | ENDPOINT=" << kpm
+                                 << " | TIMESTAMP=" << periodicMeasurement.timestamp
+                                 << " | VALUE=" << to_string(json["VALUE"]));
 }
 
 // O-RAN WG3 E2SM KPM v2.00.03 7.3.2

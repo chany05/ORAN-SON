@@ -1451,12 +1451,12 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
                 }
             }
             // 새로 추가된 부분
-            Json ueCountJson;
-            ueCountJson["CELLID"] = m_rrc->ComponentCarrierToCellId(m_componentCarrierId);  // 셀 ID
-            ueCountJson["VALUE"] = m_rrc->m_ueMap.size();  // UE 수 (m_ueMap은 연결된 UE 목록)
-            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveDl.QCI", ueCountJson);
-            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveUl.QCI", ueCountJson);
-
+            Json ueJson; 
+            ueJson["RNTI"] = m_rnti;
+            ueJson["CELLID"] = m_rrc->ComponentCarrierToCellId(m_componentCarrierId);  // 셀 ID
+            ueJson["VALUE"] = m_rrc->m_ueMap.size();  // UE 수 (m_ueMap은 연결된 UE 목록)
+            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveDl.QCI", ueJson);
+            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveUl.QCI", ueJson);
             // [추가] 디버그 로그
             // NS_LOG_UNCOND("[KPM] UEActiveDl - CELLID=" << ueCountJson["CELLID"]
             //            << " | UE_COUNT=" << ueCountJson["VALUE"]);

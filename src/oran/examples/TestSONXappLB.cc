@@ -321,7 +321,7 @@ main()
     std::cout << "  eNBs: " << numberOfEnbs << std::endl;
     std::cout << "  UEs: " << numberOfUes << " (all on eNB1)" << std::endl;
     std::cout << "  SimTime: 30s" << std::endl;
-    std::cout << "  SON Period: 1s, Handover: ON" << std::endl;
+    std::cout << "  SON Period: 4s, Handover: ON" << std::endl;
     std::cout << "==========================" << std::endl;
 
     Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(10)));
@@ -417,7 +417,7 @@ main()
     for (uint16_t i = 0; i < numberOfUes; i++) {
     Ptr<NetDevice> ueDev = ueLteDevs.Get(i);
     Ptr<NetDevice> enbDev = enbLteDevs.Get(1);
-    Simulator::Schedule(Seconds(0.5 * i), [lteHelper, ueDev, enbDev]() {
+    Simulator::Schedule(Seconds(0.5), [lteHelper, ueDev, enbDev]() {
         lteHelper->Attach(ueDev, enbDev);
     });
     }   
@@ -520,7 +520,7 @@ main()
     E2AP e2n1;
 
     // SON xApp: 주기 1초, 자체 핸드오버 ON
-    xAppHandoverSON sonxapp(1.0, true);
+    xAppHandoverSON sonxapp(4.0, true);
 
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
