@@ -399,6 +399,25 @@ xAppHandoverSON::MakeSONDecision(UeKey key)
         return std::numeric_limits<uint16_t>::max();
 
     UEContext& ue = it->second;
+    
+    // ===== 디버그 추가 =====
+    bool overloaded = IsCellOverloaded(ue.servingCellId);
+    auto cellIt = m_cellContexts.find(ue.servingCellId);
+    double loadScore = (cellIt != m_cellContexts.end()) ? cellIt->second.loadScore : -1;
+    int ueCount = (cellIt != m_cellContexts.end()) ? cellIt->second.ueCount : -1;
+
+    NS_LOG_UNCOND("[SON-DBG] RNTI=" << ue.rnti
+        << " Cell=" << ue.servingCellId
+        << " CQI=" << ue.cqi
+        << " RSRQ=" << ue.servingRsrq
+        << " isEdge=" << ue.isEdge
+        << " overloaded=" << overloaded
+        << " loadScore=" << loadScore
+        << " ueCount=" << ueCount
+        << " loadThreshold=" << m_loadThreshold
+        << " cqiThreshold=" << m_cqiThreshold
+        << " rsrqThreshold=" << m_rsrqThreshold);
+    // ===== 디버그 끝 =====
 
     // 조건 1: 셀 과부하 + Edge UE → MLB
     if (IsCellOverloaded(ue.servingCellId) && ue.isEdge)
