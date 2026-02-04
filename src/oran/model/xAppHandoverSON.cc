@@ -133,14 +133,8 @@ xAppHandoverSON::CollectRsrpRsrq()
     auto rsrpMap = ric->QueryKpmMetric("/KPM/HO.SrcCellQual.RSRP");
     for (auto& e2nodeMeasurements : rsrpMap)
     {
-        std::string mostRecentTimestamp("");
         for (auto& measurement : e2nodeMeasurements.second)
         {
-            if (mostRecentTimestamp.empty())
-                mostRecentTimestamp = measurement.timestamp;
-            if (mostRecentTimestamp != measurement.timestamp)
-                continue;
-
             if (!measurement.measurements.contains("RNTI") ||
                 !measurement.measurements.contains("CELLID"))
                 continue;
@@ -150,6 +144,9 @@ xAppHandoverSON::CollectRsrpRsrq()
             double rsrp = measurement.measurements["VALUE"];
 
             UeKey key = MakeUeKey(cellId, rnti);
+            if (m_ueContexts.find(key) != m_ueContexts.end())
+                continue;
+
             m_ueContexts[key].rnti = rnti;
             m_ueContexts[key].servingCellId = cellId;
             m_ueContexts[key].servingRsrp = rsrp;
@@ -160,14 +157,8 @@ xAppHandoverSON::CollectRsrpRsrq()
     auto rsrqMap = ric->QueryKpmMetric("/KPM/HO.SrcCellQual.RSRQ");
     for (auto& e2nodeMeasurements : rsrqMap)
     {
-        std::string mostRecentTimestamp("");
         for (auto& measurement : e2nodeMeasurements.second)
         {
-            if (mostRecentTimestamp.empty())
-                mostRecentTimestamp = measurement.timestamp;
-            if (mostRecentTimestamp != measurement.timestamp)
-                continue;
-
             if (!measurement.measurements.contains("RNTI") ||
                 !measurement.measurements.contains("CELLID"))
                 continue;
@@ -176,7 +167,8 @@ xAppHandoverSON::CollectRsrpRsrq()
             uint16_t cellId = measurement.measurements["CELLID"];
 
             UeKey key = MakeUeKey(cellId, rnti);
-            if (m_ueContexts.find(key) != m_ueContexts.end())
+            if (m_ueContexts.find(key) != m_ueContexts.end() &&
+                m_ueContexts[key].servingRsrq == 0)
             {
                 m_ueContexts[key].servingRsrq = measurement.measurements["VALUE"];
             }
@@ -193,14 +185,8 @@ xAppHandoverSON::CollectTargetRsrq()
     auto rsrqMap = ric->QueryKpmMetric("/KPM/HO.TrgtCellQual.RSRQ");
     for (auto& e2nodeMeasurements : rsrqMap)
     {
-        std::string mostRecentTimestamp("");
         for (auto& measurement : e2nodeMeasurements.second)
         {
-            if (mostRecentTimestamp.empty())
-                mostRecentTimestamp = measurement.timestamp;
-            if (mostRecentTimestamp != measurement.timestamp)
-                continue;
-
             if (!measurement.measurements.contains("RNTI") ||
                 !measurement.measurements.contains("CELLID") ||
                 !measurement.measurements.contains("TARGET"))
@@ -214,7 +200,11 @@ xAppHandoverSON::CollectTargetRsrq()
             UeKey key = MakeUeKey(cellId, rnti);
             if (m_ueContexts.find(key) != m_ueContexts.end())
             {
-                m_ueContexts[key].neighborRsrq[targetCellId] = rsrq;
+                if (m_ueContexts[key].neighborRsrq.find(targetCellId) ==
+                    m_ueContexts[key].neighborRsrq.end())
+                {
+                    m_ueContexts[key].neighborRsrq[targetCellId] = rsrq;
+                }
             }
         }
     }
@@ -229,14 +219,8 @@ xAppHandoverSON::CollectCqi()
     auto cqiMap = ric->QueryKpmMetric("/KPM/CARR.WBCQIDist.Bin");
     for (auto& e2nodeMeasurements : cqiMap)
     {
-        std::string mostRecentTimestamp("");
         for (auto& measurement : e2nodeMeasurements.second)
         {
-            if (mostRecentTimestamp.empty())
-                mostRecentTimestamp = measurement.timestamp;
-            if (mostRecentTimestamp != measurement.timestamp)
-                continue;
-
             if (!measurement.measurements.contains("RNTI") ||
                 !measurement.measurements.contains("CELLID"))
                 continue;
@@ -245,14 +229,14 @@ xAppHandoverSON::CollectCqi()
             uint16_t cellId = measurement.measurements["CELLID"];
 
             UeKey key = MakeUeKey(cellId, rnti);
-            if (m_ueContexts.find(key) != m_ueContexts.end())
+            if (m_ueContexts.find(key) != m_ueContexts.end() &&
+                m_ueContexts[key].cqi == 0)
             {
                 m_ueContexts[key].cqi = measurement.measurements["VALUE"];
             }
         }
     }
 }
-
 void
 xAppHandoverSON::CollectThroughput()
 {
@@ -263,14 +247,8 @@ xAppHandoverSON::CollectThroughput()
     auto dlMap = ric->QueryKpmMetric("/KPM/DRB.IpThpDl.QCI");
     for (auto& e2nodeMeasurements : dlMap)
     {
-        std::string mostRecentTimestamp("");
         for (auto& measurement : e2nodeMeasurements.second)
         {
-            if (mostRecentTimestamp.empty())
-                mostRecentTimestamp = measurement.timestamp;
-            if (mostRecentTimestamp != measurement.timestamp)
-                continue;
-
             if (!measurement.measurements.contains("RNTI") ||
                 !measurement.measurements.contains("CELLID"))
                 continue;
@@ -279,7 +257,8 @@ xAppHandoverSON::CollectThroughput()
             uint16_t cellId = measurement.measurements["CELLID"];
 
             UeKey key = MakeUeKey(cellId, rnti);
-            if (m_ueContexts.find(key) != m_ueContexts.end())
+            if (m_ueContexts.find(key) != m_ueContexts.end() &&
+                m_ueContexts[key].throughputDl == 0)
             {
                 m_ueContexts[key].throughputDl = measurement.measurements["VALUE"];
             }
@@ -290,14 +269,8 @@ xAppHandoverSON::CollectThroughput()
     auto ulMap = ric->QueryKpmMetric("/KPM/DRB.IpThpUl.QCI");
     for (auto& e2nodeMeasurements : ulMap)
     {
-        std::string mostRecentTimestamp("");
         for (auto& measurement : e2nodeMeasurements.second)
         {
-            if (mostRecentTimestamp.empty())
-                mostRecentTimestamp = measurement.timestamp;
-            if (mostRecentTimestamp != measurement.timestamp)
-                continue;
-
             if (!measurement.measurements.contains("RNTI") ||
                 !measurement.measurements.contains("CELLID"))
                 continue;
@@ -306,7 +279,8 @@ xAppHandoverSON::CollectThroughput()
             uint16_t cellId = measurement.measurements["CELLID"];
 
             UeKey key = MakeUeKey(cellId, rnti);
-            if (m_ueContexts.find(key) != m_ueContexts.end())
+            if (m_ueContexts.find(key) != m_ueContexts.end() &&
+                m_ueContexts[key].throughputUl == 0)
             {
                 m_ueContexts[key].throughputUl = measurement.measurements["VALUE"];
             }

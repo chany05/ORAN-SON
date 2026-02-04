@@ -44,6 +44,7 @@ class Registry
         CONNECTION_START_UE,
         CONNECTION_ESTABLISHED_UE,
         CONNECTION_ERROR_UE,
+        DISCONNECTION_UE,
     };
 
     /**
@@ -63,6 +64,7 @@ class Registry
         {CONNECTION_START_UE, "CONNECTION_START_UE"},
         {CONNECTION_ESTABLISHED_UE, "CONNECTION_ESTABLISHED_UE"},
         {CONNECTION_ERROR_UE, "CONNECTION_ERROR_UE"},
+        {DISCONNECTION_UE, "DISCONNECTION_UE"},
     };
 
     /**
@@ -305,6 +307,20 @@ NotifyHandoverEndErrorUe(std::string context, uint64_t imsi, uint16_t cellid, ui
     simulationRegistry.emplace_back(imsi, cellid, rnti, cellid, Registry::HANDOVER_ERROR_UE);
 }
 
+void 
+UeStateTransition(std::string context, uint64_t imsi, uint16_t cellId,
+                        uint16_t rnti, LteUeRrc::State oldState, LteUeRrc::State newState)
+{
+    std::cout << "[RRC] IMSI=" << imsi << " Cell=" << cellId
+              << " RNTI=" << rnti
+              << " " << oldState << " → " << newState << std::endl;
+    // CONNECTED에서 벗어날 때만 DISCONNECTION 기록
+    if (oldState == LteUeRrc::CONNECTED_NORMALLY && newState != LteUeRrc::CONNECTED_NORMALLY)
+    {
+        simulationRegistry.emplace_back(imsi, cellId, rnti, cellId, Registry::DISCONNECTION_UE);
+    }
+}
+
 int
 main()
 {
@@ -367,7 +383,7 @@ main()
      *   eNB1 (800,400)       eNB2 (1200,400)       eNB3 (1600,400)
      *
      *   UE 12개: 전부 eNB2(1200,400) 근처에 물리적으로 배치
-     *            하지만 전부 eNB1에 강제 연결 → 과부하 + 낮은 CQI
+     *            하지만 전부 eNB2에 강제 연결 → 과부하
      *   → SON이 CQI 저하 감지 → eNB2/eNB3로 핸드오버 기대
      */
 
@@ -390,12 +406,12 @@ main()
 
     // UE 위치: 전부 eNB2(1200,400) 근처에 격자 배치
     Ptr<ListPositionAllocator> uePositionAlloc = CreateObject<ListPositionAllocator>();
-    double eNB2_x = distance * 3; // 1200
-    double eNB2_y = distance;     // 400
+    double eNB2_x = distance * 3; 
+    double eNB2_y = distance;    
     for (uint16_t i = 0; i < numberOfUes; i++)
     {
-        double offsetY = (i % 4) * 15.0 - 30.0;  // -30, -15, +15, +30
         double offsetX = (i / 4) * 40.0 - 40.0;  // -40, 0, +40
+        double offsetY = (i % 4) * 15.0 - 30.0;  // -30, -15, +15, +30
         uePositionAlloc->Add(Vector(eNB2_x + offsetX, eNB2_y + offsetY, 0));
     }
     MobilityHelper ueMobility;
@@ -417,7 +433,7 @@ main()
     for (uint16_t i = 0; i < numberOfUes; i++) {
     Ptr<NetDevice> ueDev = ueLteDevs.Get(i);
     Ptr<NetDevice> enbDev = enbLteDevs.Get(1);
-    Simulator::Schedule(Seconds(0.5), [lteHelper, ueDev, enbDev]() {
+    Simulator::Schedule(Seconds(i*0.1), [lteHelper, ueDev, enbDev]() {
         lteHelper->Attach(ueDev, enbDev);
     });
     }   
@@ -511,7 +527,9 @@ main()
                     MakeCallback(&NotifyHandoverCancelledEnb));
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverTriggered",
                     MakeCallback(&NotifyHandoverTriggeredEnb));
-
+    Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/StateTransition",
+                    MakeCallback(&UeStateTransition));
+    
 
     // =========================================================================
     // E2AP + SON xApp
@@ -546,7 +564,7 @@ main()
 
     // 수동 핸드오버 없음 — SON 자체 부하분산만
 
-    Simulator::Stop(Seconds(20.0));
+    Simulator::Stop(Seconds(15.0));
     Simulator::Run();
     std::ofstream csvOutput(output_csv_filename);
     csvOutput << "Time (ns),IMSI,SrcCellId,RNTI,TrgtCellId,Type," << std::endl;

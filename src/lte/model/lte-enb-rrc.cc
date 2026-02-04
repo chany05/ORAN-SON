@@ -1354,6 +1354,7 @@ void
 UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
 {
     uint8_t measId = msg.measResults.measId;
+    NS_LOG_UNCOND("[MEAS-RECV] RNTI=" << m_rnti << " measId=" << (uint16_t)measId);
     NS_LOG_FUNCTION(this << (uint16_t)measId);
     NS_LOG_LOGIC(
         "measId " << (uint16_t)measId << " haveMeasResultNeighCells "
@@ -1431,9 +1432,11 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
             json["RNTI"] = m_rnti;
             //json["CELLID"] = m_sourceCellId; // starts counting from 1
             json["CELLID"] = m_rrc->ComponentCarrierToCellId(m_componentCarrierId); // starts counting from 1
-            json["VALUE"] = msg.measResults.measResultPCell.rsrpResult;
+            double rsrpDbm = (double)msg.measResults.measResultPCell.rsrpResult - 141.0;
+            json["VALUE"] = rsrpDbm;
             e2ap->PublishToEndpointSubscribers("/KPM/HO.SrcCellQual.RSRP", json);
-            json["VALUE"] = msg.measResults.measResultPCell.rsrqResult;
+            double rsrqDb = ((double)msg.measResults.measResultPCell.rsrqResult / 2.0) - 19.5;
+            json["VALUE"] = rsrqDb;
             e2ap->PublishToEndpointSubscribers("/KPM/HO.SrcCellQual.RSRQ", json);
             for (auto& cell : msg.measResults.measResultListEutra)
             {
@@ -1748,7 +1751,7 @@ UeManager::BuildRrcConnectionReconfiguration()
     {
         msg.haveNonCriticalExtension = false;
     }
-
+    NS_LOG_UNCOND("[MEASCONFIG] RNTI=" << m_rnti << " measIds=" << msg.measConfig.measIdToAddModList.size());
     return msg;
 }
 

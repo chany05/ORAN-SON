@@ -585,10 +585,12 @@ E2AP::PublishToEndpointSubscribers(std::string endpoint, Json json)
     auto periodicMeasurement =
         PeriodicMeasurementStruct{SystemWallClockTimestamp().ToString(), json};
     it->second.measurements.push_front(periodicMeasurement);
+    /*
     NS_LOG_UNCOND("[E2AP] " << json["MEASID"] << " | RNTI=" << json["RNTI"] << " | CELLID=" << json["CELLID"]
                                  << " | ENDPOINT=" << kpm
                                  << " | TIMESTAMP=" << periodicMeasurement.timestamp
                                  << " | VALUE=" << to_string(json["VALUE"]));
+            */                       
 }
 
 // O-RAN WG3 E2SM KPM v2.00.03 7.3.2
