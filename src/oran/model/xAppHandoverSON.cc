@@ -399,7 +399,7 @@ xAppHandoverSON::MakeSONDecision(UeKey key)
         return std::numeric_limits<uint16_t>::max();
 
     UEContext& ue = it->second;
-    
+
     // ===== 디버그 추가 =====
     bool overloaded = IsCellOverloaded(ue.servingCellId);
     auto cellIt = m_cellContexts.find(ue.servingCellId);
