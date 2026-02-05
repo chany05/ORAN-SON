@@ -538,7 +538,7 @@ main()
     E2AP e2n1;
 
     // SON xApp: 주기 1초, 자체 핸드오버 ON
-    xAppHandoverSON sonxapp(4.0, true);
+    xAppHandoverSON sonxapp(5.0, true);
 
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);

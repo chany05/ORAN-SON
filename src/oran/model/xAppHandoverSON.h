@@ -54,7 +54,7 @@ class xAppHandoverSON : public xAppHandover
 
     // 주기적 SON 체크
     void PeriodicSONCheck();
-
+    
   private:
     using UeKey = uint32_t;
 
@@ -110,6 +110,7 @@ class xAppHandoverSON : public xAppHandover
     double m_cqiThreshold;
     double m_txPower;
     double m_frequency;
+    uint16_t m_dlBandwidthPrb;  ///< DL bandwidth in PRBs   
 };
 
 } // namespace oran

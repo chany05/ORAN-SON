@@ -23,7 +23,8 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
       m_rsrqThreshold(-15.0),
       m_cqiThreshold(11),
       m_txPower(46.0),
-      m_frequency(2.12e9)
+      m_frequency(2.12e9),
+      m_dlBandwidthPrb(25)
 {
 
     NS_LOG_FUNCTION(this);
@@ -327,10 +328,18 @@ xAppHandoverSON::CalculateEdgeUEs()
 double
 xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz)
 {
-    double pathLoss = txPower_dBm - rsrp_dBm;
+    // TxPower는 전체 대역 전력 → RE 당 전력으로 보정
+    double nRE = m_dlBandwidthPrb * 12.0;
+    double txPowerPerRE_dBm = txPower_dBm - 10.0 * std::log10(nRE);
+
+    
+    double pathLoss = txPowerPerRE_dBm - rsrp_dBm;
+    double systemLoss = 1.0; // 시스템 손실이 없다고 가정
     double c = 3.0e8;
     double lambda = c / freq_Hz;
-    double d = lambda * std::pow(10.0, pathLoss / 20.0) / (4.0 * M_PI);
+    double d = lambda / std::sqrt(systemLoss) * std::pow(10, pathLoss / 20.0) / (4.0 * M_PI);
+    NS_LOG_FUNCTION("[SON-DBG] RSRP=" << rsrp_dBm
+        << " d=" << d << " m");
     return d;
 }
 
