@@ -320,13 +320,13 @@ xAppHandoverSON::CalculateEdgeUEs()
 
     for (auto& [key, ue] : m_ueContexts)
     {
-        double distance = FriisDistanceEstimate(ue.servingRsrp, m_txPower, m_frequency);
+        double distance = FriisDistanceEstimate(ue.servingRsrp, m_txPower, m_frequency, ue.rnti);
         ue.isEdge = (distance > m_cellRadius * m_edgeThreshold);
     }
 }
 
 double
-xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz)
+xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz, uint16_t rnti)
 {
     // TxPower는 전체 대역 전력 → RE 당 전력으로 보정
     double nRE = m_dlBandwidthPrb * 12.0;
@@ -338,7 +338,7 @@ xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, doub
     double c = 3.0e8;
     double lambda = c / freq_Hz;
     double d = lambda / std::sqrt(systemLoss) * std::pow(10, pathLoss / 20.0) / (4.0 * M_PI);
-    NS_LOG_FUNCTION("[SON-DBG] RSRP=" << rsrp_dBm
+    NS_LOG_FUNCTION("[SON-DBG] RNTI=" << rnti << " RSRP=" << rsrp_dBm
         << " d=" << d << " m");
     return d;
 }
