@@ -54,7 +54,7 @@ class xAppHandoverSON : public xAppHandover
 
     // 주기적 SON 체크
     void PeriodicSONCheck();
-    
+
   private:
     using UeKey = uint32_t;
 
@@ -82,7 +82,7 @@ class xAppHandoverSON : public xAppHandover
 
     // Edge UE 계산
     void CalculateEdgeUEs();
-    double FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz);
+    double FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz, uint16_t rnti);
 
     // 부하 계산
     void CalculateLoadScores();
