@@ -66,7 +66,8 @@ xAppHandoverSON::PeriodicSONCheck()
             << " RSRQ=" << ue.servingRsrq
             << " CQI=" << ue.cqi
             << " DL=" << ue.throughputDl << "kbps"
-            << " UL=" << ue.throughputUl << "kbps");
+            << " UL=" << ue.throughputUl << "kbps"
+            << " TxPower=" << m_cellContexts[ue.servingCellId].txPower << "dBm");
     }
     // ===== 디버그 끝 =====
 
@@ -118,10 +119,11 @@ xAppHandoverSON::CollectKPMs()
     m_cellContexts.clear();
 
     CollectRsrpRsrq();
-    CollectTargetRsrq();   // 추가
+    CollectTargetRsrq();
     CollectCqi();
     CollectThroughput();
-    CollectUeCount();
+    CollectCellKpms();    // ← 추가: 모든 셀 등록 (UE=0 포함)
+    CollectUeCount();     // 기존: m_ueContexts 기반 edge 집계
 }
 
 void
@@ -290,7 +292,69 @@ xAppHandoverSON::CollectThroughput()
 }
 
 void
-xAppHandoverSON::CollectUeCount()
+xAppHandoverSON::CollectCellKpms()
+{
+    NS_LOG_FUNCTION(this);
+    E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
+    if (!ric) return;
+
+    // UE Count
+    auto ueCountMap = ric->QueryKpmMetric("/KPM/DRB.UEActiveDl.QCI");
+    for (auto& [endpoint, measurements] : ueCountMap)
+    {
+        std::string mostRecentTimestamp("");
+        for (auto& m : measurements)
+        {
+            if (mostRecentTimestamp.empty())
+                mostRecentTimestamp = m.timestamp;
+            if (mostRecentTimestamp != m.timestamp)
+                continue;
+
+            if (!m.measurements.contains("CELLID") ||
+                !m.measurements.contains("VALUE"))
+                continue;
+
+            uint16_t cellId = m.measurements["CELLID"];
+            int ueCount = m.measurements["VALUE"];
+
+            if (m_cellContexts.find(cellId) == m_cellContexts.end())
+            {
+                m_cellContexts[cellId] = CellContext();
+                m_cellContexts[cellId].cellId = cellId;
+            }
+            m_cellContexts[cellId].ueCount = ueCount;
+        }
+    }
+    // TxPower
+    auto txPwrMap = ric->QueryKpmMetric("/KPM/CARR.AvgTxPwr");
+    for (auto& [endpoint, measurements] : txPwrMap)
+    {
+        std::string mostRecentTimestamp("");
+        for (auto& m : measurements)
+        {
+            if (mostRecentTimestamp.empty())
+                mostRecentTimestamp = m.timestamp;
+            if (mostRecentTimestamp != m.timestamp)
+                continue;
+            if (!m.measurements.contains("CELLID") ||
+                !m.measurements.contains("VALUE"))
+                continue;
+
+            uint16_t cellId = m.measurements["CELLID"];
+            double txPower = m.measurements["VALUE"];
+
+            if (m_cellContexts.find(cellId) == m_cellContexts.end())
+            {
+                m_cellContexts[cellId] = CellContext();
+                m_cellContexts[cellId].cellId = cellId;
+            }
+            m_cellContexts[cellId].txPower = txPower;
+        }
+    }
+}
+
+void
+xAppHandoverSON::CollectUeCount() 
 {
     NS_LOG_FUNCTION(this);
 
@@ -302,7 +366,6 @@ xAppHandoverSON::CollectUeCount()
             m_cellContexts[cellId] = CellContext();
             m_cellContexts[cellId].cellId = cellId;
         }
-        m_cellContexts[cellId].ueCount++;
         if (ue.isEdge)
         {
             m_cellContexts[cellId].edgeUeCount++;
@@ -430,10 +493,13 @@ uint16_t
 xAppHandoverSON::FindLeastLoadedNeighbor(UeKey key)
 {
     NS_LOG_FUNCTION(this);
-
+    NS_LOG_INFO("Finding least loaded neighbor for UE key: " << key);
     auto ueIt = m_ueContexts.find(key);
     if (ueIt == m_ueContexts.end())
+    {
+        NS_LOG_INFO("UE context not found.");
         return std::numeric_limits<uint16_t>::max();
+    }
 
     uint16_t servingCell = ueIt->second.servingCellId;
     uint16_t bestCell = std::numeric_limits<uint16_t>::max();
@@ -441,13 +507,16 @@ xAppHandoverSON::FindLeastLoadedNeighbor(UeKey key)
 
     for (auto& [cellId, cell] : m_cellContexts)
     {
+        NS_LOG_INFO("Checking Cell " << cellId << "servingCell: " << servingCell << " loadScore: " << cell.loadScore);
         if (cellId != servingCell && cell.loadScore < minLoad)
         {
+            NS_LOG_INFO("Checking neighbor Cell " << cellId << " with load " << cell.loadScore);
             minLoad = cell.loadScore;
             bestCell = cellId;
+            NS_LOG_INFO("New best cell found: Cell " << bestCell << " with load " << minLoad);
         }
     }
-
+    NS_LOG_INFO("Least loaded neighbor for UE key " << key << " is Cell " << bestCell << " with load " << minLoad);
     return bestCell;
 }
 

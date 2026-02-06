@@ -311,9 +311,9 @@ void
 UeStateTransition(std::string context, uint64_t imsi, uint16_t cellId,
                         uint16_t rnti, LteUeRrc::State oldState, LteUeRrc::State newState)
 {
-    std::cout << "[RRC] IMSI=" << imsi << " Cell=" << cellId
+    NS_LOG_INFO("[RRC] IMSI=" << imsi << " Cell=" << cellId
               << " RNTI=" << rnti
-              << " " << oldState << " → " << newState << std::endl;
+              << " " << oldState << " → " << newState);
     // CONNECTED에서 벗어날 때만 DISCONNECTION 기록
     if (oldState == LteUeRrc::CONNECTED_NORMALLY && newState != LteUeRrc::CONNECTED_NORMALLY)
     {

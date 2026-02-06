@@ -941,6 +941,9 @@ class LteEnbRrc : public Object
      */
     void ConfigureCell(std::map<uint8_t, Ptr<ComponentCarrierBaseStation>> ccPhyConf);
 
+    // lte-enb-rrc.h에 추가
+    void PublishCellKpm();
+
     /**
      * \brief Configure carriers.
      * \param ccPhyConf the component carrier configuration

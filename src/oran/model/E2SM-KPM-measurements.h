@@ -325,7 +325,7 @@ const std::map<std::string, std::tuple<enum MeasurementType, std::string, enum F
         {"TB.ErrNbrUl", {INTEGER, "s", NOTIMPLEMENTED}},
         // 4.5.8 Power Utilization Measurements
         {"CARR.MaxTxPwr", {REAL, "dBm", NOTIMPLEMENTED}},
-        {"CARR.AvgTxPwr", {REAL, "dBm", NOTIMPLEMENTED}},
+        {"CARR.AvgTxPwr", {REAL, "dBm", IMPLEMENTED}},
         // 4.5.9 PRB Full Utilisation
         {"RRU.PrbCongestionDl", {INTEGER, "%", NOTIMPLEMENTED}},
         {"RRU.PrbCongestionUl", {INTEGER, "%", NOTIMPLEMENTED}},

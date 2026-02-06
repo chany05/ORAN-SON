@@ -46,6 +46,7 @@
 #include <ns3/component-carrier-enb.h>      // <-- 추가
 #include <ns3/lte-enb-mac.h>       // <-- 추가
 #include <ns3/lte-pdcp.h>      // <-- 추가
+#include <ns3/lte-enb-phy.h>      // <-- 추가
 
 namespace ns3
 {
@@ -1453,16 +1454,7 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
                     e2ap->PublishToEndpointSubscribers("/KPM/HO.TrgtCellQual.RSRQ", json);
                 }
             }
-            // 새로 추가된 부분
-            Json ueJson; 
-            ueJson["RNTI"] = m_rnti;
-            ueJson["CELLID"] = m_rrc->ComponentCarrierToCellId(m_componentCarrierId);  // 셀 ID
-            ueJson["VALUE"] = m_rrc->m_ueMap.size();  // UE 수 (m_ueMap은 연결된 UE 목록)
-            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveDl.QCI", ueJson);
-            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveUl.QCI", ueJson);
-            // [추가] 디버그 로그
-            // NS_LOG_UNCOND("[KPM] UEActiveDl - CELLID=" << ueCountJson["CELLID"]
-            //            << " | UE_COUNT=" << ueCountJson["VALUE"]);
+            
             // ============================================================
             // [추가] CQI KPM 발행 (MAC에서 실제 CQI 조회)
             // ============================================================
@@ -1547,9 +1539,56 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
                                         m_rnti,
                                         msg);
 
-} // end of UeManager::RecvMeasurementReport
+} // end of UeManager::RecvMeasurementReportmakeue
 
 // methods forwarded from CMAC SAP
+
+// lte-enb-rrc.cc
+void
+LteEnbRrc::PublishCellKpm()
+{
+    auto node = GetNode();
+    if (node && node->GetNApplications() > 1)
+    {
+        auto app = node->GetApplication(1);
+        Ptr<oran::E2AP> e2ap = DynamicCast<oran::E2AP>(app);
+        if (e2ap)
+        {
+            uint16_t cellId = ComponentCarrierToCellId(0);  // LteEnbRrc 함수 직접 호출
+
+            Json ueJson; 
+            ueJson["CELLID"] = cellId;  // 셀 ID
+            ueJson["VALUE"] = m_ueMap.size();  // UE 수 (m_ueMap은 연결된 UE 목록)
+
+            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveDl.QCI", ueJson);
+            e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveUl.QCI", ueJson);
+
+            // [추가] 디버그 로그
+            NS_LOG_UNCOND("[KPM] UEActiveDl - CELLID=" << ueJson["CELLID"]
+                       << " | UE_COUNT=" << ueJson["VALUE"]);
+
+            // TXP
+            auto ccEnb = DynamicCast<ComponentCarrierEnb>(m_componentCarrierPhyConf.at(0));
+            if (ccEnb)
+            {
+                Ptr<LteEnbPhy> phy = ccEnb->GetPhy();
+                double txPower = phy->GetTxPower();
+
+                Json txJson;
+                txJson["CELLID"] = cellId;
+                txJson["VALUE"] = txPower;
+                e2ap->PublishToEndpointSubscribers("/KPM/CARR.AvgTxPwr", txJson);
+
+                NS_LOG_UNCOND("[KPM] TxPower - CELLID=" << cellId
+                           << " | TxPower=" << txPower << "dBm");
+            }
+
+            
+        }
+    }
+    
+    Simulator::Schedule(Seconds(1.0), &LteEnbRrc::PublishCellKpm, this);
+}
 
 void
 UeManager::CmacUeConfigUpdateInd(LteEnbCmacSapUser::UeConfig cmacParams)
@@ -2605,6 +2644,7 @@ LteEnbRrc::AddUeMeasReportConfig(LteRrcSap::ReportConfigEutra config)
     return measIds;
 }
 
+//E2 setup??
 void
 LteEnbRrc::ConfigureCell(std::map<uint8_t, Ptr<ComponentCarrierBaseStation>> ccPhyConf)
 {
@@ -2693,7 +2733,7 @@ LteEnbRrc::ConfigureCell(std::map<uint8_t, Ptr<ComponentCarrierBaseStation>> ccP
      * SystemInformationPeriodicity attribute to configure this).
      */
     Simulator::Schedule(MilliSeconds(16), &LteEnbRrc::SendSystemInformation, this);
-
+    Simulator::Schedule(Seconds(1.0), &LteEnbRrc::PublishCellKpm, this);
     m_configured = true;
 }
 

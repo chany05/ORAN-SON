@@ -35,6 +35,7 @@ struct CellContext
     uint32_t ueCount;
     uint32_t edgeUeCount;
     double loadScore;
+    double txPower;
 };
 
 class xAppHandoverSON : public xAppHandover
@@ -79,6 +80,7 @@ class xAppHandoverSON : public xAppHandover
     void CollectCqi();
     void CollectThroughput();
     void CollectUeCount();
+    void CollectCellKpms();
 
     // Edge UE 계산
     void CalculateEdgeUEs();
