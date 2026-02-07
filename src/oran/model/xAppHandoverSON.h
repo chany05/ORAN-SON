@@ -84,7 +84,7 @@ class xAppHandoverSON : public xAppHandover
 
     // Edge UE 계산
     void CalculateEdgeUEs();
-    double FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz, uint16_t rnti);
+    double FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz, uint16_t rnti, uint16_t cellId);
 
     // 부하 계산
     void CalculateLoadScores();

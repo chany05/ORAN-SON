@@ -138,6 +138,24 @@ class E2AP : public PubSubInfra
      */
     const std::map<std::string, std::deque<PeriodicMeasurementStruct>> QueryKpmMetric(
         std::string metric) const;
+    /**
+     * \brief Send E2 Setup Request to RIC with cell info and RAN Function List
+     *        (O-RAN WG3 E2AP v2.02 §8.3.1)
+     */
+    void SendE2SetupRequest();
+
+    /**
+     * \brief Query static cell info registered during E2 Setup (RIC side)
+     * \param cellId Cell ID to query
+     * \return Json with cell info, empty if not found
+     */
+    static Json QueryCellInfo(uint16_t cellId);
+
+    /**
+     * \brief Query all registered cell IDs
+     * \return vector of registered cell IDs
+     */
+    static std::vector<uint16_t> GetRegisteredCellIds();
 
   private:
     /**
@@ -194,6 +212,18 @@ class E2AP : public PubSubInfra
                                         std::string& dest_endpoint,
                                         Json& payload);
     // temporarily
+    /**
+     * \brief Static storage of cell info from E2 Setup (RIC side)
+     *        key = cellId, value = Json with cell static info
+     */
+    static std::map<uint16_t, Json> s_cellInfoStorage;
+
+    /**
+     * \brief Handle E2 Setup Request on RIC side
+     *        Registers cell info, RAN Functions, endpoints, and subscriptions
+     */
+    void HandleE2SetupRequest(std::string& src_endpoint, Json& payload);
+
   public:
     /**
      * \brief Send handover order to the target E2Node

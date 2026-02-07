@@ -547,20 +547,23 @@ main()
 
     Simulator::Schedule(Seconds(0.5), &E2AP::Connect, &e2t);
     Simulator::Schedule(Seconds(1.0), &E2AP::Connect, &e2n1);
-    Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n1);
-    Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n1);
+    Simulator::Schedule(Seconds(1.5), &E2AP::SendE2SetupRequest, &e2n1);
+    //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n1);
+    //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n1);
 
     E2AP e2n2;
     enbNodes.Get(1)->AddApplication(&e2n2);
     Simulator::Schedule(Seconds(1.0), &E2AP::Connect, &e2n2);
-    Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n2);
-    Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n2);
+    Simulator::Schedule(Seconds(1.5), &E2AP::SendE2SetupRequest, &e2n2);
+    //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n2);
+    //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n2);
 
     E2AP e2n3;
     enbNodes.Get(2)->AddApplication(&e2n3);
     Simulator::Schedule(Seconds(1.0), &E2AP::Connect, &e2n3);
-    Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n3);
-    Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n3);
+    Simulator::Schedule(Seconds(1.5), &E2AP::SendE2SetupRequest, &e2n3);
+    //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n3);
+    //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n3);
 
     // 수동 핸드오버 없음 — SON 자체 부하분산만
 

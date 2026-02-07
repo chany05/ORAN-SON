@@ -383,16 +383,21 @@ xAppHandoverSON::CalculateEdgeUEs()
 
     for (auto& [key, ue] : m_ueContexts)
     {
-        double distance = FriisDistanceEstimate(ue.servingRsrp, m_txPower, m_frequency, ue.rnti);
+        double distance = FriisDistanceEstimate(ue.servingRsrp, m_cellContexts[ue.servingCellId].txPower, m_frequency, ue.rnti, ue.servingCellId);
         ue.isEdge = (distance > m_cellRadius * m_edgeThreshold);
     }
 }
 
 double
-xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz, uint16_t rnti)
+xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz, uint16_t rnti, uint16_t cellId)
 {
+    Json cellInfo = E2AP::QueryCellInfo(cellId);
+    if (!cellInfo.empty())
+    {
+        int prb = cellInfo["DL_BANDWIDTH_PRB"];
+    }
     // TxPower는 전체 대역 전력 → RE 당 전력으로 보정
-    double nRE = m_dlBandwidthPrb * 12.0;
+    double nRE = prb * 12.0;
     double txPowerPerRE_dBm = txPower_dBm - 10.0 * std::log10(nRE);
 
     

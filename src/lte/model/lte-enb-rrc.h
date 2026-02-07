@@ -709,6 +709,11 @@ class LteEnbRrc : public Object
      */
     static TypeId GetTypeId();
 
+    uint16_t GetDlBandwidth() const { return m_dlBandwidth; }
+    uint16_t GetUlBandwidth() const { return m_ulBandwidth; }
+    uint32_t GetDlEarfcn() const { return m_dlEarfcn; }
+    uint32_t GetUlEarfcn() const { return m_ulEarfcn; }
+
     /**
      * Set the X2 SAP this RRC should interact with
      * \param s the X2 SAP Provider to be used by this RRC entity

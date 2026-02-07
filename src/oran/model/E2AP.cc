@@ -8,6 +8,7 @@ using namespace ns3;
 using namespace oran;
 
 NS_LOG_COMPONENT_DEFINE("E2AP");
+std::map<uint16_t, Json> E2AP::s_cellInfoStorage;
 
 Ptr<LteEnbRrc>
 E2AP::GetRrc()
@@ -240,17 +241,24 @@ E2AP::HandlePayload(std::string src_endpoint, std::string dest_endpoint, Json pa
     break;
     // O-RAN WG3 E2AP v2.02 8.3.1.2
     // E2 initiated
+    // O-RAN WG3 E2AP v2.02 8.3.1.2
+    // E2 initiated
     case E2_SETUP_REQUEST: {
+        HandleE2SetupRequest(src_endpoint, payload);
     }
     break;
     // O-RAN WG3 E2AP v2.02 8.3.1.2
     // RIC initiated
     case E2_SETUP_RESPONSE: {
+        NS_LOG_UNCOND("[E2Setup] " << GetRootEndpoint() << " Setup accepted by RIC"
+            << " | Accepted: " << payload["RAN_FUNCTIONS_ACCEPTED"].size());
     }
     break;
     // O-RAN WG3 E2AP v2.02 8.3.1.3
     // RIC initiated
     case E2_SETUP_FAILURE: {
+        NS_LOG_ERROR("[E2Setup] " << GetRootEndpoint()
+            << " Setup FAILED | Cause: " << payload["CAUSE"]);
     }
     break;
     // O-RAN WG3 E2AP v2.02 8.3.2.2
@@ -672,6 +680,187 @@ E2AP::HandleIndicationPayload(std::string& src_endpoint, std::string& dest_endpo
     }
 }
 
+void
+E2AP::SendE2SetupRequest()
+{
+    NS_LOG_FUNCTION(this);
+
+    Ptr<LteEnbRrc> rrc = GetRrc();
+    if (!rrc)
+    {
+        NS_LOG_WARN("[E2Setup] No RRC available, cannot send E2 Setup Request");
+        return;
+    }
+
+    // === Cell Info (표준 정보만) ===
+    uint16_t cellId = rrc->ComponentCarrierToCellId(0);
+    uint16_t dlBandwidth = rrc->GetDlBandwidth();
+    uint16_t ulBandwidth = rrc->GetUlBandwidth();
+    uint32_t dlEarfcn = rrc->GetDlEarfcn();
+    uint32_t ulEarfcn = rrc->GetUlEarfcn();
+
+    Json cellInfo;
+    cellInfo["CELLID"] = cellId;
+    cellInfo["DL_BANDWIDTH_PRB"] = dlBandwidth;
+    cellInfo["UL_BANDWIDTH_PRB"] = ulBandwidth;
+    cellInfo["DL_EARFCN"] = dlEarfcn;
+    cellInfo["UL_EARFCN"] = ulEarfcn;
+
+    // === RAN Function List ===
+    Json ranFunctionList = Json::array();
+
+    // E2SM-KPM: IMPLEMENTED 메트릭 목록
+    Json kpmFunction;
+    kpmFunction["RAN_FUNCTION_ID"] = 1;
+    kpmFunction["SERVICE_MODEL"] = "E2SM_KPM";
+    Json kpmEndpoints = Json::array();
+    for (auto& [name, info] : m_defaultEndpointsKpmTypeAndUnit)
+    {
+        if (std::get<2>(info) == IMPLEMENTED)
+        {
+            kpmEndpoints.push_back(name);
+        }
+    }
+    kpmFunction["ENDPOINTS"] = kpmEndpoints;
+    ranFunctionList.push_back(kpmFunction);
+
+    // E2SM-RC: 지원하는 Control Style 목록
+    Json rcFunction;
+    rcFunction["RAN_FUNCTION_ID"] = 2;
+    rcFunction["SERVICE_MODEL"] = "E2SM_RC";
+    rcFunction["SUPPORTED_STYLES"] = Json::array({
+        "CONNECTED_MODE_MOBILITY_CONTROL"
+    });
+    ranFunctionList.push_back(rcFunction);
+
+    // === E2 Setup Request 메시지 구성 ===
+    Json msg;
+    msg["DEST_ENDPOINT"] = "/E2Node/0";
+    msg["PAYLOAD"]["TYPE"] = E2_SETUP_REQUEST;
+    msg["PAYLOAD"]["GLOBAL_E2_NODE_ID"] = GetRootEndpoint();
+    msg["PAYLOAD"]["CELL_INFO"] = cellInfo;
+    msg["PAYLOAD"]["RAN_FUNCTION_LIST"] = ranFunctionList;
+
+    NS_LOG_UNCOND("[E2Setup] " << GetRootEndpoint()
+        << " → RIC | CellId=" << cellId
+        << " DL_BW=" << dlBandwidth << "PRB"
+        << " DL_EARFCN=" << dlEarfcn
+        << " KPMs=" << kpmEndpoints.size());
+
+    SendPayload(msg);
+}
+
+void
+E2AP::HandleE2SetupRequest(std::string& src_endpoint, Json& payload)
+{
+    NS_LOG_FUNCTION(this);
+
+    // === Failure 체크 ===
+
+    // 1. 필수 필드 검증
+    if (!payload.contains("CELL_INFO") ||
+        !payload["CELL_INFO"].contains("CELLID") ||
+        !payload["CELL_INFO"].contains("DL_BANDWIDTH_PRB") ||
+        !payload["CELL_INFO"].contains("DL_EARFCN"))
+    {
+        NS_LOG_WARN("[E2Setup-RIC] Missing required fields from " << src_endpoint);
+        Json failureMsg;
+        failureMsg["DEST_ENDPOINT"] = src_endpoint;
+        failureMsg["PAYLOAD"]["TYPE"] = E2_SETUP_FAILURE;
+        failureMsg["PAYLOAD"]["CAUSE"] = "MISSING_REQUIRED_FIELDS";
+        SendPayload(failureMsg);
+        return;
+    }
+
+    uint16_t cellId = payload["CELL_INFO"]["CELLID"];
+
+    // 2. 중복 Cell ID 체크
+    if (s_cellInfoStorage.find(cellId) != s_cellInfoStorage.end())
+    {
+        NS_LOG_WARN("[E2Setup-RIC] Duplicate CellId=" << cellId << " from " << src_endpoint);
+        Json failureMsg;
+        failureMsg["DEST_ENDPOINT"] = src_endpoint;
+        failureMsg["PAYLOAD"]["TYPE"] = E2_SETUP_FAILURE;
+        failureMsg["PAYLOAD"]["CAUSE"] = "DUPLICATE_CELL_ID";
+        SendPayload(failureMsg);
+        return;
+    }
+
+    // === Cell Info 저장 ===
+    s_cellInfoStorage[cellId] = payload["CELL_INFO"];
+
+    NS_LOG_UNCOND("[E2Setup-RIC] Registered CellId=" << cellId
+        << " DL_BW=" << payload["CELL_INFO"]["DL_BANDWIDTH_PRB"]
+        << " DL_EARFCN=" << payload["CELL_INFO"]["DL_EARFCN"]);
+
+    // === RAN Function List 처리 ===
+    Json acceptedList = Json::array();
+    Json rejectedList = Json::array();
+
+    if (payload.contains("RAN_FUNCTION_LIST"))
+    {
+        for (auto& ranFunc : payload["RAN_FUNCTION_LIST"])
+        {
+            int funcId = ranFunc["RAN_FUNCTION_ID"];
+            std::string model = ranFunc["SERVICE_MODEL"];
+
+            if (model == "E2SM_KPM")
+            {
+                // KPM 엔드포인트 자동 등록 + 구독
+                if (ranFunc.contains("ENDPOINTS"))
+                {
+                    for (auto& kpmName : ranFunc["ENDPOINTS"])
+                    {
+                        std::string endpoint = "/KPM/" + kpmName.get<std::string>();
+                        std::string fullEndpoint = buildEndpoint(src_endpoint, endpoint);
+
+                        // eNB 측 엔드포인트 등록 (E2 Node Configuration Update와 동일 로직)
+                        sRegisterEndpoint(src_endpoint, fullEndpoint);
+
+                        NS_LOG_FUNCTION("[E2Setup-RIC] Registered KPM endpoint: " << fullEndpoint);
+                    }
+
+                    // RIC이 해당 eNB의 모든 KPM에 구독
+                    for (auto& kpmName : ranFunc["ENDPOINTS"])
+                    {
+                        std::string endpoint = src_endpoint + "/KPM/" + kpmName.get<std::string>();
+                        SubscribeToEndpointPeriodic(endpoint, 1000);
+                    }
+                }
+                acceptedList.push_back(funcId);
+            }
+            else if (model == "E2SM_RC")
+            {
+                // RC는 저장만 — 런타임에 Indication/Control로 동작
+                acceptedList.push_back(funcId);
+            }
+            else
+            {
+                // 알 수 없는 서비스 모델 → Reject
+                Json rejected;
+                rejected["RAN_FUNCTION_ID"] = funcId;
+                rejected["CAUSE"] = "UNSUPPORTED_SERVICE_MODEL";
+                rejectedList.push_back(rejected);
+            }
+        }
+    }
+
+    // === E2 Setup Response 전송 ===
+    Json responseMsg;
+    responseMsg["DEST_ENDPOINT"] = src_endpoint;
+    responseMsg["PAYLOAD"]["TYPE"] = E2_SETUP_RESPONSE;
+    responseMsg["PAYLOAD"]["RAN_FUNCTIONS_ACCEPTED"] = acceptedList;
+    if (!rejectedList.empty())
+    {
+        responseMsg["PAYLOAD"]["RAN_FUNCTIONS_REJECTED"] = rejectedList;
+    }
+
+    NS_LOG_UNCOND("[E2Setup-RIC] → " << src_endpoint
+        << " | Accepted=" << acceptedList.size()
+        << " Rejected=" << rejectedList.size());
+
+    SendPayload(responseMsg);
+}
 const std::map<std::string, std::deque<PeriodicMeasurementStruct>>
 E2AP::QueryKpmMetric(std::string metric) const
 {
@@ -679,6 +868,26 @@ E2AP::QueryKpmMetric(std::string metric) const
     if (it == m_kpmToEndpointStorage.end())
         return std::map<std::string, std::deque<PeriodicMeasurementStruct>>();
     return it->second;
+}
+
+Json
+E2AP::QueryCellInfo(uint16_t cellId)
+{
+    auto it = s_cellInfoStorage.find(cellId);
+    if (it != s_cellInfoStorage.end())
+        return it->second;
+    return Json();
+}
+
+std::vector<uint16_t>
+E2AP::GetRegisteredCellIds()
+{
+    std::vector<uint16_t> ids;
+    for (auto& [id, info] : s_cellInfoStorage)
+    {
+        ids.push_back(id);
+    }
+    return ids;
 }
 
 #include "E2SM-KPM.cc"
