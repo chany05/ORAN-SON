@@ -52,3 +52,4 @@ cmake-build-release/
 .cache/
 .~lock.outputSON.csv#
 src/oran/examples/TestSONXappLB.cc
+.~lock.outputSONLB.csv#

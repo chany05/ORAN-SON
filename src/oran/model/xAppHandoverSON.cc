@@ -392,15 +392,19 @@ double
 xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz, uint16_t rnti, uint16_t cellId)
 {
     Json cellInfo = E2AP::QueryCellInfo(cellId);
+    double nRE;
     if (!cellInfo.empty())
     {
         int prb = cellInfo["DL_BANDWIDTH_PRB"];
+        // TxPower는 전체 대역 전력 → RE 당 전력으로 보정
+        nRE = prb * 12.0;
     }
-    // TxPower는 전체 대역 전력 → RE 당 전력으로 보정
-    double nRE = prb * 12.0;
+    else
+    {
+        nRE = m_dlBandwidthPrb * 12.0;  // fallback
+    }
     double txPowerPerRE_dBm = txPower_dBm - 10.0 * std::log10(nRE);
 
-    
     double pathLoss = txPowerPerRE_dBm - rsrp_dBm;
     double systemLoss = 1.0; // 시스템 손실이 없다고 가정
     double c = 3.0e8;
