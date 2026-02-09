@@ -145,6 +145,14 @@ class E2AP : public PubSubInfra
     void SendE2SetupRequest();
 
     /**
+     * \brief Send CIO Control Request to target E2 Node
+     *        O-RAN E2SM-RC Style 9 (Measurement Reporting Config), Action 2 (Modify MR Config)
+     * \param [in] cioList Json array of {CELL_ID, CIO_VALUE} entries
+     * \param [in] destination_endpoint The endpoint of the target E2 Node
+     */
+    void E2SmRcSendCioControlRequest(Json cioList, std::string destination_endpoint);
+
+    /**
      * \brief Query static cell info registered during E2 Setup (RIC side)
      * \param cellId Cell ID to query
      * \return Json with cell info, empty if not found

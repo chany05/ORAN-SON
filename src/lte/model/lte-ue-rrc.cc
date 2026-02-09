@@ -1675,10 +1675,23 @@ LteUeRrc::ApplyMeasConfig(LteRrcSap::MeasConfig mc)
          ++it)
     {
         // simplifying assumptions
+        // 3GPP TS 36.331 §5.5.2.5: Apply cellsToAddModList (Cell Individual Offset)
+        for (auto& cell : it->measObjectEutra.cellsToAddModList)
+        {
+            NS_LOG_LOGIC(this << " adding CIO for physCellId=" << cell.physCellId
+                            << " offset=" << (int)cell.cellIndividualOffset);
+            m_cellIndividualOffset[cell.physCellId] = cell.cellIndividualOffset;
+        }
+
+        // 3GPP TS 36.331 §5.5.2.5: Apply cellsToRemoveList
+        for (auto& idx : it->measObjectEutra.cellsToRemoveList)
+        {
+            // cellsToRemoveList contains cellIndex, not physCellId
+            // 현재 단순화: cellIndex == physCellId 매핑은 추후 정교화 가능
+            NS_LOG_LOGIC(this << " removing CIO for cellIndex=" << (uint32_t)idx);
+        }
         NS_ASSERT_MSG(it->measObjectEutra.cellsToRemoveList.empty(),
                       "cellsToRemoveList not supported");
-        NS_ASSERT_MSG(it->measObjectEutra.cellsToAddModList.empty(),
-                      "cellsToAddModList not supported");
         NS_ASSERT_MSG(it->measObjectEutra.cellsToRemoveList.empty(),
                       "blackCellsToRemoveList not supported");
         NS_ASSERT_MSG(it->measObjectEutra.blackCellsToAddModList.empty(),
@@ -2171,12 +2184,22 @@ LteUeRrc::MeasurementReportTriggering(uint8_t measId)
 
         double mn; // Mn, the measurement result of the neighbouring cell
         double ofn = measObjectEutra
-                         .offsetFreq; // Ofn, the frequency specific offset of the frequency of the
-        double ocn = 0.0;             // Ocn, the cell specific offset of the neighbour cell
+                        .offsetFreq; // Ofn, the frequency specific offset of the frequency of the
+        double ocn = 0.0;             // Ocn, the cell specific offset of the neighbour cell (set per-cell below)
         double mp;                    // Mp, the measurement result of the PCell
         double ofp = measObjectEutra
-                         .offsetFreq; // Ofp, the frequency specific offset of the primary frequency
-        double ocp = 0.0;             // Ocp, the cell specific offset of the PCell
+                        .offsetFreq; // Ofp, the frequency specific offset of the primary frequency
+        // 3GPP TS 36.331 §5.5.4.4: Ocp from cellIndividualOffset for serving cell
+        auto ocpIt = m_cellIndividualOffset.find(m_cellId);
+        double ocp = (ocpIt != m_cellIndividualOffset.end())
+            ? static_cast<double>(ocpIt->second) * 0.5  // Q-OffsetRange IE → dB
+            : 0.0;
+
+        // ↓ 이 로그 추가
+        NS_LOG_UNCOND("[A3-CIO] RNTI=" << m_rnti
+            << " serving=" << m_cellId
+            << " ocp=" << ocp
+            << " CIO_map_size=" << m_cellIndividualOffset.size());
         // Off, the offset parameter for this event.
         double off = EutranMeasurementMapping::IeValue2ActualA3Offset(reportConfigEutra.a3Offset);
         // Hys, the hysteresis parameter for this event.
@@ -2229,6 +2252,21 @@ LteUeRrc::MeasurementReportTriggering(uint8_t measId)
                 NS_FATAL_ERROR("unsupported triggerQuantity");
                 break;
             }
+            
+            // 3GPP TS 36.331 §5.5.4.4: Ocn from cellIndividualOffset for neighbor cell
+            {
+                auto ocnIt = m_cellIndividualOffset.find(cellId);
+                ocn = (ocnIt != m_cellIndividualOffset.end())
+                    ? static_cast<double>(ocnIt->second) * 0.5  // Q-OffsetRange IE → dB
+                    : 0.0;
+            }
+            NS_LOG_UNCOND("[A3-CIO] RNTI=" << m_rnti
+                << " serving=" << m_cellId
+                << " neighbor=" << cellId
+                << " ocn=" << ocn
+                << " ocp=" << ocp
+                << " mn=" << mn
+                << " mp=" << mp);
 
             bool hasTriggered =
                 isMeasIdInReportList && (measReportIt->second.cellsTriggeredList.find(cellId) !=
@@ -2329,6 +2367,14 @@ LteUeRrc::MeasurementReportTriggering(uint8_t measId)
             default:
                 NS_FATAL_ERROR("unsupported triggerQuantity");
                 break;
+            }
+            
+            // 3GPP TS 36.331: Ocn from cellIndividualOffset
+            {
+                auto ocnIt = m_cellIndividualOffset.find(cellId);
+                ocn = (ocnIt != m_cellIndividualOffset.end())
+                    ? static_cast<double>(ocnIt->second) * 0.5
+                    : 0.0;
             }
 
             bool hasTriggered =
@@ -2447,7 +2493,15 @@ LteUeRrc::MeasurementReportTriggering(uint8_t measId)
                     NS_FATAL_ERROR("unsupported triggerQuantity");
                     break;
                 }
-
+                
+                // 3GPP TS 36.331: Ocn from cellIndividualOffset
+                {
+                    auto ocnIt = m_cellIndividualOffset.find(cellId);
+                    ocn = (ocnIt != m_cellIndividualOffset.end())
+                        ? static_cast<double>(ocnIt->second) * 0.5
+                        : 0.0;
+                }
+                
                 bool hasTriggered =
                     isMeasIdInReportList && (measReportIt->second.cellsTriggeredList.find(cellId) !=
                                              measReportIt->second.cellsTriggeredList.end());
@@ -3187,6 +3241,7 @@ LteUeRrc::LeaveConnectedMode()
     NS_LOG_FUNCTION(this << m_imsi);
     m_leaveConnectedMode = true;
     m_storedMeasValues.clear();
+    m_cellIndividualOffset.clear();
     ResetRlfParams();
 
     std::map<uint8_t, LteRrcSap::MeasIdToAddMod>::iterator measIdIt;

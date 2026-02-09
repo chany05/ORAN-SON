@@ -51,6 +51,42 @@ xAppHandoverSON::PeriodicSONCheck()
 {
     NS_LOG_FUNCTION(this);
 
+    // === 테스트용 고정 CIO (1회만 실행) ===
+    static bool cioApplied = false;
+    if (!cioApplied)
+    {
+        cioApplied = true;
+        NS_LOG_UNCOND("[SON-CIO] Applying test CIO values (Cell2 overloaded)");
+
+        E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
+        if (ric)
+        {
+            // Cell2 과부하 → Cell1, Cell3으로 분산
+            // FineBalancer 방식: 각 셀의 글로벌 CIO
+            //   Cell1 CIO = +6 (매력적 → UE 유입 유도)
+            //   Cell2 CIO = -6 (비매력적 → UE 유출 유도)  
+            //   Cell3 CIO = +6 (매력적 → UE 유입 유도)
+
+            // eNB1에: 이웃 CIO (Cell2=-6, Cell3=+6)
+            ric->E2SmRcSendCioControlRequest(
+                Json::array({{{"CELL_ID", 2}, {"CIO_VALUE", -6}},
+                             {{"CELL_ID", 3}, {"CIO_VALUE", 6}}}),
+                "/E2Node/1/");
+
+            // eNB2에: 이웃 CIO (Cell1=+6, Cell3=+6)
+            ric->E2SmRcSendCioControlRequest(
+                Json::array({{{"CELL_ID", 1}, {"CIO_VALUE", 6}},
+                             {{"CELL_ID", 3}, {"CIO_VALUE", 6}}}),
+                "/E2Node/2/");
+
+            // eNB3에: 이웃 CIO (Cell1=+6, Cell2=-6)
+            ric->E2SmRcSendCioControlRequest(
+                Json::array({{{"CELL_ID", 1}, {"CIO_VALUE", 6}},
+                             {{"CELL_ID", 2}, {"CIO_VALUE", -6}}}),
+                "/E2Node/3/");
+        }
+    }
+
     // 1. KPM 수집
     CollectKPMs();
 
@@ -562,6 +598,45 @@ xAppHandoverSON::FindBestRsrqCell(UeKey key)
 
     return bestCell;
 }
+// =============================================================================
+// CIO sending
+// =============================================================================
+void
+xAppHandoverSON::ApplyCioActions(const std::vector<double>& cioActions,
+                          const std::vector<uint16_t>& cellIds,
+                          const std::vector<std::string>& enbEndpoints)
+{
+    std::map<uint16_t, int8_t> cellCioMap;
+    for (size_t i = 0; i < cellIds.size(); i++)
+    {
+        int8_t cio = static_cast<int8_t>(std::round(cioActions[i] * 24.0));
+        cio = std::max((int8_t)-24, std::min((int8_t)24, cio));
+        cellCioMap[cellIds[i]] = cio;
+    }
+
+    E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
+    if (!ric) return;
+
+    for (size_t i = 0; i < cellIds.size(); i++)
+    {
+        Json cioList = Json::array();
+        for (auto& [cellId, cioValue] : cellCioMap)
+        {
+            if (cellId == cellIds[i]) continue;
+            Json entry;
+            entry["CELL_ID"] = cellId;
+            entry["CIO_VALUE"] = cioValue;
+            cioList.push_back(entry);
+        }
+
+        std::string srcEndpoint = enbEndpoints[i];
+        ric->E2SmRcSendCioControlRequest(cioList, srcEndpoint);
+
+        NS_LOG_INFO("[xApp-CIO] Sent CIO_LIST to " << srcEndpoint
+                    << " entries=" << cioList.size());
+    }
+}
+
 
 // =============================================================================
 // 핸드오버 의사결정 (E2SM-RC 콜백)

@@ -95,7 +95,9 @@ class xAppHandoverSON : public xAppHandover
     uint16_t FindLeastLoadedNeighbor(UeKey key);
     uint16_t FindBestRsrqCell(UeKey key);
     void CollectTargetRsrq();
-
+    void ApplyCioActions(const std::vector<double>& cioActions,
+                          const std::vector<uint16_t>& cellIds,
+                          const std::vector<std::string>& enbEndpoints);
     // 상태 저장
     std::map<UeKey, UEContext> m_ueContexts;
     std::map<uint16_t, CellContext> m_cellContexts;

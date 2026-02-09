@@ -1543,6 +1543,82 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
 
 // methods forwarded from CMAC SAP
 
+void
+LteEnbRrc::SetCellIndividualOffset(uint16_t neighborCellId, int8_t cioValue)
+{
+    NS_ASSERT_MSG(cioValue >= -24 && cioValue <= 24,
+                  "CIO out of Q-OffsetRange: " << (int)cioValue);
+    m_cellIndividualOffset[neighborCellId] = cioValue;
+}
+
+// SendCioMeasConfigToAllUes()는 기존 수정 9와 동일
+
+void
+LteEnbRrc::SendCioMeasConfigToAllUes()
+{
+    NS_LOG_FUNCTION(this);
+
+    if (m_cellIndividualOffset.empty())
+    {
+        return;
+    }
+
+    // Build cellsToAddModList from current CIO map
+    // 3GPP TS 36.331 §6.3.5: MeasObjectEutra.cellsToAddModList
+    std::list<LteRrcSap::CellsToAddMod> cellsToAddModList;
+    uint8_t cellIndex = 1;  // 3GPP: cellIndex starts from 1
+    for (auto& kv : m_cellIndividualOffset)
+    {
+        LteRrcSap::CellsToAddMod entry;
+        entry.cellIndex = cellIndex++;
+        entry.physCellId = kv.first;
+        entry.cellIndividualOffset = kv.second;
+        cellsToAddModList.push_back(entry);
+    }
+
+    // Build MeasConfig with updated MeasObject
+    LteRrcSap::MeasConfig measConfig;
+    measConfig.haveQuantityConfig = false;
+    measConfig.haveMeasGapConfig = false;
+    measConfig.haveSmeasure = false;
+    measConfig.haveSpeedStatePars = false;
+
+    LteRrcSap::MeasObjectToAddMod measObject;
+    measObject.measObjectId = 1;  // 기존 measObjectId 재사용
+    measObject.measObjectEutra.carrierFreq = m_dlEarfcn;
+    measObject.measObjectEutra.allowedMeasBandwidth = m_dlBandwidth;
+    measObject.measObjectEutra.presenceAntennaPort1 = false;
+    measObject.measObjectEutra.neighCellConfig = 0;
+    measObject.measObjectEutra.offsetFreq = 0;
+    measObject.measObjectEutra.cellsToAddModList = cellsToAddModList;
+    measObject.measObjectEutra.haveCellForWhichToReportCGI = false;
+    measConfig.measObjectToAddModList.push_back(measObject);
+
+    // Send RrcConnectionReconfiguration to each connected UE
+    // 3GPP TS 36.331 §5.3.5
+    for (auto& ueIt : m_ueMap)
+    {
+        Ptr<UeManager> ueManager = ueIt.second;
+        if (ueManager->GetState() == UeManager::CONNECTED_NORMALLY)
+        {
+            uint16_t rnti = ueIt.first;
+
+            LteRrcSap::RrcConnectionReconfiguration msg;
+            msg.rrcTransactionIdentifier = ueManager->GetNewRrcTransactionIdentifier();
+            msg.haveMeasConfig = true;
+            msg.measConfig = measConfig;
+            msg.haveMobilityControlInfo = false;
+            msg.haveRadioResourceConfigDedicated = false;
+            msg.haveNonCriticalExtension = false;
+
+            NS_LOG_INFO("[CIO-RRC] Sending MeasConfig with CIO to RNTI=" << rnti
+                        << " cells=" << cellsToAddModList.size());
+
+            m_rrcSapUser->SendRrcConnectionReconfiguration(rnti, msg);
+        }
+    }
+}
+
 // lte-enb-rrc.cc
 void
 LteEnbRrc::PublishCellKpm()

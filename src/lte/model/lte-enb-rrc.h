@@ -424,6 +424,12 @@ class UeManager : public Object
                                         const State oldState,
                                         const State newState);
 
+    /**
+     *
+     * \return a newly allocated identifier for a new RRC transaction
+     */
+    uint8_t GetNewRrcTransactionIdentifier();
+
   private:
     /**
      * Add a new LteDataRadioBearerInfo structure to the UeManager
@@ -468,12 +474,6 @@ class UeManager : public Object
      * current configuration
      */
     LteRrcSap::RadioResourceConfigDedicated BuildRadioResourceConfigDedicated();
-
-    /**
-     *
-     * \return a newly allocated identifier for a new RRC transaction
-     */
-    uint8_t GetNewRrcTransactionIdentifier();
 
     /**
      * \param lcid a Logical Channel Identifier
@@ -1198,7 +1198,7 @@ class LteEnbRrc : public Object
 
   private:
     // RRC SAP methods
-
+    
     /**
      * Part of the RRC protocol. Forwarding LteEnbRrcSapProvider::CompleteSetupUe interface to
      * UeManager::CompleteSetupUe
@@ -1481,6 +1481,24 @@ class LteEnbRrc : public Object
     bool IsRandomAccessCompleted(uint16_t rnti);
 
   public:
+    // public 메서드 영역에 추가
+    /**
+     * \brief Update CIO for a neighbor cell and push MeasConfig to all connected UEs.
+     * Called by E2AP when xApp sends RIC_CONTROL_REQUEST with CIO action.
+     * \param neighborCellId the physical cell ID of the neighbor
+     * \param cioValue Q-OffsetRange IE value (-24..24), actual = value * 0.5 dB
+     */
+
+    // CIO 값만 저장 (MeasConfig 전송 안 함)
+    void SetCellIndividualOffset(uint16_t neighborCellId, int8_t cioValue);
+    // 저장된 CIO를 MeasConfig로 UE에 전송
+
+    /**
+     * \brief Send RRC Reconfiguration with updated cellsToAddModList to all UEs.
+     * 3GPP TS 36.331 §5.3.5: MeasConfig in RrcConnectionReconfiguration
+     */
+    void SendCioMeasConfigToAllUes();
+
     /**
      * Add a neighbour with an X2 interface
      *
@@ -1634,6 +1652,11 @@ class LteEnbRrc : public Object
     uint16_t m_ulBandwidth;
     /// Last allocated RNTI
     uint16_t m_lastAllocatedRnti;
+
+    // private 멤버 변수 영역에 추가
+    /// Per-neighbor Cell Individual Offset: neighborCellId → Q-OffsetRange IE value (-24..24)
+    /// 3GPP TS 36.331 §6.3.5: actual offset = IE value * 0.5 dB
+    std::map<uint16_t, int8_t> m_cellIndividualOffset;
 
     /// The System Information Block Type 1 that is currently broadcasted over BCH.
     std::vector<LteRrcSap::SystemInformationBlockType1> m_sib1;

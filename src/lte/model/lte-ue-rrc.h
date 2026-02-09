@@ -1083,6 +1083,13 @@ class LteUeRrc : public Object
     std::map<uint16_t, MeasValues> m_storedMeasValues;
 
     /**
+     * \brief Internal storage of the cell individual offsets for neighbor cells.
+     */
+    /// Cell Individual Offset per neighbor cell (physCellId → Q-OffsetRange IE value)
+    /// 3GPP TS 36.331 §6.3.5: actual offset = IE value * 0.5 dB, range -24..24
+    std::map<uint16_t, int8_t> m_cellIndividualOffset;
+
+    /**
      * \brief Stored measure values per carrier.
      */
     std::map<uint16_t, std::map<uint8_t, MeasValues>> m_storedMeasValuesPerCarrier;

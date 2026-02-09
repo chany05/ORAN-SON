@@ -399,6 +399,70 @@ else
         case RIC_CONTROL_SERVICE_STYLES::UE_INFORMATION_AND_ASSIGNMENT::VALUE:
             break;
         case RIC_CONTROL_SERVICE_STYLES::MEASUREMENT_REPORTING_CONFIGURATION_CONTROL::VALUE:
+            switch (controlHeader.contents.format_1.ControlActionID)
+            {
+            // O-RAN E2SM-RC R004 v09.00 §7.6.11, Action ID 2
+            // Modify MR Configuration: cellIndividualOffset (RAN Param ID 113)
+            case RIC_CONTROL_SERVICE_STYLES::MEASUREMENT_REPORTING_CONFIGURATION_CONTROL::
+                MODIFY_MR_CONFIGURATION::VALUE: {
+
+                Ptr<LteEnbRrc> rrc = GetRrc();
+                if (!rrc)
+                {
+                    NS_LOG_ERROR("[E2SM-RC] MODIFY_MR_CONFIG: no RRC");
+                    return;
+                }
+
+                NS_ASSERT_MSG(payload.contains("MESSAGE"),
+                            "MODIFY_MR_CONFIGURATION missing MESSAGE");
+
+                if (payload["MESSAGE"].contains("CIO_LIST"))
+                {
+                    uint16_t myCellId = rrc->ComponentCarrierToCellId(0);
+                    int validCount = 0;
+
+                    for (auto& entry : payload["MESSAGE"]["CIO_LIST"])
+                    {
+                        uint16_t neighborCellId = entry["CELL_ID"];
+                        int8_t cioValue = entry["CIO_VALUE"];
+
+                        if (cioValue < -24 || cioValue > 24)
+                        {
+                            NS_LOG_WARN("[E2SM-RC] CIO out of range for cell "
+                                        << neighborCellId << ": " << (int)cioValue);
+                            continue;
+                        }
+
+                        rrc->SetCellIndividualOffset(neighborCellId, cioValue);
+                        validCount++;
+
+                        NS_LOG_INFO("[E2SM-RC] CIO | Cell=" << myCellId
+                                    << " Neighbor=" << neighborCellId
+                                    << " CIO=" << (int)cioValue
+                                    << " (" << cioValue * 0.5 << " dB)");
+                    }
+
+                    // 리스트 전체 설정 후 한번만 MeasConfig 전송
+                    if (validCount > 0)
+                    {
+                        rrc->SendCioMeasConfigToAllUes();
+                    }
+                }
+
+                // RIC_CONTROL_ACKNOWLEDGE
+                Json ackMsg;
+                ackMsg["DEST_ENDPOINT"] = src_endpoint;
+                ackMsg["PAYLOAD"]["TYPE"] = RIC_CONTROL_ACKNOWLEDGE;
+                ackMsg["PAYLOAD"]["SERVICE_MODEL"] = E2SM_RC;
+                SendPayload(ackMsg);
+            }
+            break;
+
+            default:
+                NS_LOG_WARN("[E2SM-RC] Unimplemented MR Config action: "
+                            << (int)controlHeader.contents.format_1.ControlActionID);
+                break;
+            }
             break;
         case RIC_CONTROL_SERVICE_STYLES::MULTIPLE_ACTIONS_CONTROL::VALUE:
             break;
@@ -444,6 +508,34 @@ E2AP::E2SmRcSendHandoverControlRequest(uint16_t rnti, uint16_t targetCell, std::
 
     // Send indication with control request
     SendPayload(HANDOVER_CONTROL_REQUEST_MSG);
+}
+
+void
+E2AP::E2SmRcSendCioControlRequest(Json cioList, std::string destination_endpoint)
+{
+    NS_LOG_FUNCTION(this << destination_endpoint);
+
+    E2SM_RC_RIC_CONTROL_HEADER hdr;
+    hdr.format = RC_CONTROL_HEADER_FORMAT_1;
+    hdr.contents.format_1.RNTI = 0;  // Cell-level control
+    hdr.contents.format_1.RICControlStyleType =
+        RIC_CONTROL_SERVICE_STYLES::MEASUREMENT_REPORTING_CONFIGURATION_CONTROL::VALUE;
+    hdr.contents.format_1.ControlActionID =
+        RIC_CONTROL_SERVICE_STYLES::MEASUREMENT_REPORTING_CONFIGURATION_CONTROL::
+            MODIFY_MR_CONFIGURATION::VALUE;
+    hdr.contents.format_1.RicDecision = RC_ACCEPT;
+
+    Json json_hdr;
+    to_json(json_hdr, hdr);
+
+    Json msg;
+    msg["DEST_ENDPOINT"] = destination_endpoint;
+    msg["PAYLOAD"]["TYPE"] = RIC_CONTROL_REQUEST;
+    msg["PAYLOAD"]["SERVICE_MODEL"] = E2SM_RC;
+    msg["PAYLOAD"]["HEADER"] = json_hdr;
+    msg["PAYLOAD"]["MESSAGE"]["CIO_LIST"] = cioList;
+
+    SendPayload(msg);
 }
 
 void

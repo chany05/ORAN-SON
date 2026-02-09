@@ -350,7 +350,9 @@ main()
     lteHelper->SetEpcHelper(epcHelper);
     lteHelper->SetSchedulerType("ns3::RrFfMacScheduler");
 
-    lteHelper->SetHandoverAlgorithmType("ns3::NoOpHandoverAlgorithm");
+    lteHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
+    lteHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(0.0));   // 3dB
+    lteHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(256)));
 
     Ptr<Node> pgw = epcHelper->GetPgwNode();
     Ptr<Node> sgw = epcHelper->GetSgwNode();
@@ -538,7 +540,7 @@ main()
     E2AP e2n1;
 
     // SON xApp: 주기 1초, 자체 핸드오버 ON
-    xAppHandoverSON sonxapp(5.0, true);
+    xAppHandoverSON sonxapp(5.0, false);
 
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
