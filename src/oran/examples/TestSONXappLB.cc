@@ -540,7 +540,7 @@ main()
     E2AP e2n1;
 
     // SON xApp: 주기 1초, 자체 핸드오버 ON
-    xAppHandoverSON sonxapp(5.0, false);
+    xAppHandoverSON sonxapp(3.0, false);
 
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
@@ -569,7 +569,7 @@ main()
 
     // 수동 핸드오버 없음 — SON 자체 부하분산만
 
-    Simulator::Stop(Seconds(15.0));
+    Simulator::Stop(Seconds(25.0));
     Simulator::Run();
     std::ofstream csvOutput(output_csv_filename);
     csvOutput << "Time (ns),IMSI,SrcCellId,RNTI,TrgtCellId,Type," << std::endl;

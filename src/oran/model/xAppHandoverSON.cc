@@ -676,10 +676,12 @@ xAppHandoverSON::HandoverDecision(Json& payload)
 
     uint16_t decidedTargetCellId = requestedTargetCellId;
 
-    // SON 로직으로 대체 결정
-    uint16_t sonDecision = MakeSONDecision(key);
-    if (sonDecision != std::numeric_limits<uint16_t>::max())
-        decidedTargetCellId = sonDecision;
+    if (m_initiateHandovers)  // ← 가드 추가
+    {
+        uint16_t sonDecision = MakeSONDecision(key);
+        if (sonDecision != std::numeric_limits<uint16_t>::max())
+            decidedTargetCellId = sonDecision;
+    }
 
     // 이미 핸드오버 중이면 거부
     if (m_imsiInHandover.find(key) != m_imsiInHandover.end())

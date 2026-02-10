@@ -1048,6 +1048,13 @@ UeManager::SendUeContextRelease()
         m_rrc->m_handoverEndOkTrace(m_imsi,
                                     m_rrc->ComponentCarrierToCellId(m_componentCarrierId),
                                     m_rnti);
+
+        // 핸드오버 완료 → UE가 CONNECTED_NORMALLY → CIO 재전송
+        if (!m_rrc->m_cellIndividualOffset.empty())
+        {
+            NS_LOG_INFO("[CIO-HO] RNTI=" << m_rnti << " now CONNECTED_NORMALLY, sending CIO");
+            m_rrc->SendCioMeasConfigToAllUes();
+        }
         break;
 
     default:
@@ -1480,11 +1487,12 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
                             cqiJson["VALUE"] = cqi;
                             e2ap->PublishToEndpointSubscribers(
                                 "/KPM/CARR.WBCQIDist.Bin", cqiJson);
-
+                            /*
                             NS_LOG_UNCOND("[KPM] CQI - RNTI=" << m_rnti
                                 << " | CELLID="
                                 << m_rrc->ComponentCarrierToCellId(m_componentCarrierId)
                                 << " | CQI=" << cqi);
+                            */
                         }
                         else
                         {
@@ -1523,11 +1531,11 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
 
                     tputJson["VALUE"] = (int)ulKbps;
                     e2ap->PublishToEndpointSubscribers("/KPM/DRB.IpThpUl.QCI", tputJson);
-
+/*
                     NS_LOG_UNCOND("[KPM] Throughput - RNTI=" << m_rnti
                         << " | CELLID=" << m_rrc->ComponentCarrierToCellId(m_componentCarrierId)
                         << " | DL=" << (int)dlKbps << "kbps"
-                        << " | UL=" << (int)ulKbps << "kbps");
+                        << " | UL=" << (int)ulKbps << "kbps");*/
                 }
             }
         }
@@ -1638,11 +1646,11 @@ LteEnbRrc::PublishCellKpm()
 
             e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveDl.QCI", ueJson);
             e2ap->PublishToEndpointSubscribers("/KPM/DRB.UEActiveUl.QCI", ueJson);
-
+/*
             // [추가] 디버그 로그
             NS_LOG_UNCOND("[KPM] UEActiveDl - CELLID=" << ueJson["CELLID"]
                        << " | UE_COUNT=" << ueJson["VALUE"]);
-
+*/
             // TXP
             auto ccEnb = DynamicCast<ComponentCarrierEnb>(m_componentCarrierPhyConf.at(0));
             if (ccEnb)
@@ -1654,9 +1662,9 @@ LteEnbRrc::PublishCellKpm()
                 txJson["CELLID"] = cellId;
                 txJson["VALUE"] = txPower;
                 e2ap->PublishToEndpointSubscribers("/KPM/CARR.AvgTxPwr", txJson);
-
+/*
                 NS_LOG_UNCOND("[KPM] TxPower - CELLID=" << cellId
-                           << " | TxPower=" << txPower << "dBm");
+                           << " | TxPower=" << txPower << "dBm");*/
             }
 
             
@@ -3474,6 +3482,9 @@ LteEnbRrc::DoTriggerHandover(uint16_t rnti, uint16_t targetCellId)
             // Control returns empty optional if unanswered, or a response
             std::optional<uint16_t> ricTargetCellId =
                 e2ap->E2SmRcHandoverControl(rnti, targetCellId, *this);
+            NS_LOG_DEBUG(this << " RIC targetCellId="
+                              << (ricTargetCellId.has_value() ? std::to_string(ricTargetCellId.value())
+                                                              : "no response yet"));
             if (!ricTargetCellId.has_value())
             {
                 // Reschedule function to wait for the response

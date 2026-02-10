@@ -687,6 +687,17 @@ LteUeRrc::DoNotifyRandomAccessSuccessful()
             VarMeasReportListClear(measIdIt->second.measId);
         }
 
+        // 3GPP TS 36.331 §5.3.5.4: 핸드오버 완료 시 소스 eNB의 CIO 무효화
+        // 타겟 eNB가 SendCioMeasConfigToAllUes()로 새 CIO를 전송하면 자동 재설정
+        if (!m_cellIndividualOffset.empty())
+        {
+            NS_LOG_INFO("[CIO-RESET] RNTI=" << m_rnti
+                        << " cellId=" << m_cellId
+                        << " Handover complete, clearing stale CIO map"
+                        << " (prev_size=" << m_cellIndividualOffset.size() << ")");
+            m_cellIndividualOffset.clear();
+        }
+
         SwitchToState(CONNECTED_NORMALLY);
         m_cmacSapProvider.at(0)->NotifyConnectionSuccessful(); // RA successful during handover
         m_handoverEndOkTrace(m_imsi, m_cellId, m_rnti);
@@ -2196,7 +2207,7 @@ LteUeRrc::MeasurementReportTriggering(uint8_t measId)
             : 0.0;
 
         // ↓ 이 로그 추가
-        NS_LOG_UNCOND("[A3-CIO] RNTI=" << m_rnti
+        NS_LOG_LOGIC("[A3-CIO] RNTI=" << m_rnti
             << " serving=" << m_cellId
             << " ocp=" << ocp
             << " CIO_map_size=" << m_cellIndividualOffset.size());
@@ -2260,7 +2271,7 @@ LteUeRrc::MeasurementReportTriggering(uint8_t measId)
                     ? static_cast<double>(ocnIt->second) * 0.5  // Q-OffsetRange IE → dB
                     : 0.0;
             }
-            NS_LOG_UNCOND("[A3-CIO] RNTI=" << m_rnti
+            NS_LOG_LOGIC("[A3-CIO] RNTI=" << m_rnti
                 << " serving=" << m_cellId
                 << " neighbor=" << cellId
                 << " ocn=" << ocn
