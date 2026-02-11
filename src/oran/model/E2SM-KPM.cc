@@ -75,6 +75,7 @@ E2AP::HandleE2SmKpmIndicationPayload(std::string& src_endpoint,
             kpmIt->second.emplace(src_endpoint, std::deque<PeriodicMeasurementStruct>{});
             measuringE2NodeIt = kpmIt->second.find(src_endpoint);
         }
+        measuringE2NodeIt->second.clear();
         std::move(begin(measurements),
                   end(measurements),
                   front_inserter(measuringE2NodeIt->second));

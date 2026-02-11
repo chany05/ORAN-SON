@@ -413,7 +413,7 @@ main()
     for (uint16_t i = 0; i < numberOfUes; i++)
     {
         double offsetX = (i / 4) * 40.0 - 40.0;  // -40, 0, +40
-        double offsetY = (i % 4) * 15.0 - 30.0;  // -30, -15, +15, +30
+        double offsetY = (i % 4) * 20.0 - 30.0;  // -30, -10, 10, +30
         uePositionAlloc->Add(Vector(eNB2_x + offsetX, eNB2_y + offsetY, 0));
     }
     MobilityHelper ueMobility;

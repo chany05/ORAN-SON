@@ -861,13 +861,21 @@ E2AP::HandleE2SetupRequest(std::string& src_endpoint, Json& payload)
 
     SendPayload(responseMsg);
 }
-const std::map<std::string, std::deque<PeriodicMeasurementStruct>>
-E2AP::QueryKpmMetric(std::string metric) const
+std::map<std::string, std::deque<PeriodicMeasurementStruct>>
+E2AP::QueryKpmMetric(std::string metric)
 {
     auto it = m_kpmToEndpointStorage.find(metric);
     if (it == m_kpmToEndpointStorage.end())
         return std::map<std::string, std::deque<PeriodicMeasurementStruct>>();
-    return it->second;
+    auto result = it->second;     // 복사
+    
+    // ★ 읽은 후 클리어
+    for (auto& [endpoint, deque] : it->second)
+    {
+        deque.clear();
+    }
+    
+    return result;
 }
 
 Json

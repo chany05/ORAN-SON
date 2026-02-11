@@ -136,8 +136,8 @@ class E2AP : public PubSubInfra
      * \param metric KPM metric to retrieve
      * \return map addressed by E2 Node endpoints with a measurements deque as value
      */
-    const std::map<std::string, std::deque<PeriodicMeasurementStruct>> QueryKpmMetric(
-        std::string metric) const;
+    std::map<std::string, std::deque<PeriodicMeasurementStruct>> QueryKpmMetric(
+        std::string metric);
     /**
      * \brief Send E2 Setup Request to RIC with cell info and RAN Function List
      *        (O-RAN WG3 E2AP v2.02 §8.3.1)

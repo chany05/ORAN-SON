@@ -1362,7 +1362,7 @@ void
 UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
 {
     uint8_t measId = msg.measResults.measId;
-    NS_LOG_UNCOND("[MEAS-RECV] RNTI=" << m_rnti << " measId=" << (uint16_t)measId);
+    //NS_LOG_UNCOND("[MEAS-RECV] RNTI=" << m_rnti << " measId=" << (uint16_t)measId);
     NS_LOG_FUNCTION(this << (uint16_t)measId);
     NS_LOG_LOGIC(
         "measId " << (uint16_t)measId << " haveMeasResultNeighCells "
