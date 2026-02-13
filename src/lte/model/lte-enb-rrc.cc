@@ -1559,7 +1559,37 @@ LteEnbRrc::SetCellIndividualOffset(uint16_t neighborCellId, int8_t cioValue)
     m_cellIndividualOffset[neighborCellId] = cioValue;
 }
 
-// SendCioMeasConfigToAllUes()는 기존 수정 9와 동일
+
+void
+LteEnbRrc::SetDlTxPower(double txPowerDbm)
+{
+    NS_LOG_FUNCTION(this << txPowerDbm);
+
+    // ─── Step 1: PHY Tx Power 변경 ───
+    // PublishCellKpm과 동일한 경로로 PHY에 접근
+    auto ccEnb = DynamicCast<ComponentCarrierEnb>(m_componentCarrierPhyConf.at(0));
+    NS_ASSERT_MSG(ccEnb, "SetDlTxPower: no ComponentCarrierEnb for CC 0");
+
+    Ptr<LteEnbPhy> phy = ccEnb->GetPhy();
+    NS_ASSERT_MSG(phy, "SetDlTxPower: no PHY for CC 0");
+
+    double oldPower = phy->GetTxPower();
+    phy->SetTxPower(txPowerDbm);
+
+    uint16_t cellId = ComponentCarrierToCellId(0);
+    NS_LOG_INFO("[DL-TXP] Cell=" << cellId
+                << " TxPower: " << oldPower << " → " << txPowerDbm << " dBm");
+
+    // ─── Step 2: SIB2 업데이트 ───
+    // SendSystemInformation()에서 매 주기 m_cphySapProvider->GetReferenceSignalPower()를
+    // 읽어 SIB2에 반영하므로, PHY의 TxPower가 변경되면 다음 SIB2 전송 시 자동 반영됨.
+    // 즉시 반영이 필요하면 아래 주석을 해제:
+    //
+    // SendSystemInformation();
+    //
+    // 단, MLB 시나리오에서는 SIB2 주기(기본 80ms)보다 TXP 변경 주기가 훨씬 길므로
+    // 자동 반영으로 충분함.
+}
 
 void
 LteEnbRrc::SendCioMeasConfigToAllUes()

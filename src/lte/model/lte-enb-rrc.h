@@ -1492,7 +1492,18 @@ class LteEnbRrc : public Object
     // CIO 값만 저장 (MeasConfig 전송 안 함)
     void SetCellIndividualOffset(uint16_t neighborCellId, int8_t cioValue);
     // 저장된 CIO를 MeasConfig로 UE에 전송
-
+    /**
+     * \brief Set DL Tx Power for this cell's primary component carrier.
+     * Called by E2AP when xApp sends RIC_CONTROL_REQUEST with DL TXP action.
+     *
+     * 1) PHY의 TxPower 변경 → 실제 신호 세기 반영
+     * 2) SIB2의 referenceSignalPower 업데이트 → UE 경로손실 계산 정합성 유지
+     *
+     * \param txPowerDbm 새 송신 전력 (-60 ~ 50 dBm)
+     *        3GPP TS 36.331 §6.3.1 PDSCH-ConfigCommon
+     */
+    void SetDlTxPower(double txPowerDbm);
+// ===== 추가 끝 =====
     /**
      * \brief Send RRC Reconfiguration with updated cellsToAddModList to all UEs.
      * 3GPP TS 36.331 §5.3.5: MeasConfig in RrcConnectionReconfiguration

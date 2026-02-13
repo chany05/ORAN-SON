@@ -72,13 +72,14 @@ xAppHandoverSON::PeriodicSONCheck()
                 Json::array({{{"CELL_ID", 2}, {"CIO_VALUE", -6}},
                              {{"CELL_ID", 3}, {"CIO_VALUE", 6}}}),
                 "/E2Node/1/");
+            ric->E2SmRcSendTxPowerControlRequest(40.0, "/E2Node/2/");
 
             // eNB2에: 이웃 CIO (Cell1=+6, Cell3=+6)
             ric->E2SmRcSendCioControlRequest(
                 Json::array({{{"CELL_ID", 1}, {"CIO_VALUE", 6}},
                              {{"CELL_ID", 3}, {"CIO_VALUE", 6}}}),
                 "/E2Node/2/");
-
+            
             // eNB3에: 이웃 CIO (Cell1=+6, Cell2=-6)
             ric->E2SmRcSendCioControlRequest(
                 Json::array({{{"CELL_ID", 1}, {"CIO_VALUE", 6}},
@@ -91,12 +92,12 @@ xAppHandoverSON::PeriodicSONCheck()
     CollectKPMs();
 
     // ===== 디버그: 수집된 데이터 출력 =====
-    NS_LOG_UNCOND("[SON] === Periodic Check === UEs=" << m_ueContexts.size()
+    NS_LOG_LOGIC("[SON] === Periodic Check === UEs=" << m_ueContexts.size()
         << " Cells=" << m_cellContexts.size());
 
     for (auto& [key, ue] : m_ueContexts)
     {
-        NS_LOG_UNCOND("[SON]   UE RNTI=" << ue.rnti
+        NS_LOG_LOGIC("[SON]   UE RNTI=" << ue.rnti
             << " Cell=" << ue.servingCellId
             << " RSRP=" << ue.servingRsrp
             << " RSRQ=" << ue.servingRsrq
@@ -446,7 +447,7 @@ xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, doub
     double c = 3.0e8;
     double lambda = c / freq_Hz;
     double d = lambda / std::sqrt(systemLoss) * std::pow(10, pathLoss / 20.0) / (4.0 * M_PI);
-    NS_LOG_FUNCTION("[SON-DBG] RNTI=" << rnti << " RSRP=" << rsrp_dBm
+    NS_LOG_LOGIC("[SON-DBG] RNTI=" << rnti << " RSRP=" << rsrp_dBm
         << " d=" << d << " m");
     return d;
 }

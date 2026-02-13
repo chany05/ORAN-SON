@@ -151,7 +151,8 @@ class E2AP : public PubSubInfra
      * \param [in] destination_endpoint The endpoint of the target E2 Node
      */
     void E2SmRcSendCioControlRequest(Json cioList, std::string destination_endpoint);
-
+    
+    void E2SmRcSendTxPowerControlRequest(double txPowerDbm, std::string destination_endpoint);
     /**
      * \brief Query static cell info registered during E2 Setup (RIC side)
      * \param cellId Cell ID to query

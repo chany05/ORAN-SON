@@ -332,6 +332,57 @@ E2AP::HandleE2SmRcControlRequest(std::string& src_endpoint,
         case RIC_CONTROL_SERVICE_STYLES::RADIO_BEARER_CONTROL::VALUE:
             break;
         case RIC_CONTROL_SERVICE_STYLES::RADIO_RESOURCE_ALLOCATION_CONTROL::VALUE:
+            ///////////////////////////////////TXP////////////////////////////////////////
+            //in Uplink power control - control service - action ID 10
+            switch (controlHeader.contents.format_1.ControlActionID)
+                {
+                case RIC_CONTROL_SERVICE_STYLES::RADIO_RESOURCE_ALLOCATION_CONTROL::
+                    DL_TX_POWER_CONTROL::VALUE:
+                {
+                    Ptr<LteEnbRrc> rrc = GetRrc();
+                    if (!rrc)
+                    {
+                        NS_LOG_ERROR("[E2SM-RC] DL_TX_POWER_CONTROL: no RRC");
+                        return;
+                    }
+
+                    NS_ASSERT_MSG(payload.contains("MESSAGE"),
+                                "DL_TX_POWER_CONTROL missing MESSAGE");
+
+                    // MESSAGE 예시: { "TX_POWER": 23 }
+                    // 단위: dBm, 범위: -60 ~ 50 (3GPP TS 36.331 §6.3.1)
+                    if (payload["MESSAGE"].contains("TX_POWER"))
+                    {
+                        int8_t txPower = payload["MESSAGE"]["TX_POWER"];
+                        
+                        if (txPower < -60 || txPower > 50)
+                        {
+                            NS_LOG_WARN("[E2SM-RC] TX_POWER out of range: " << (int)txPower);
+                            return;
+                        }
+
+                        uint16_t cellId = rrc->ComponentCarrierToCellId(0);
+                        rrc->SetDlTxPower(txPower);  // ← lte-enb-rrc에 구현 필요
+                        
+                        NS_LOG_INFO("[E2SM-RC] DL TXP | Cell=" << cellId
+                                    << " TxPower=" << (int)txPower << " dBm");
+                    }
+
+                    // RIC_CONTROL_ACKNOWLEDGE
+                    Json ackMsg;
+                    ackMsg["DEST_ENDPOINT"] = src_endpoint;
+                    ackMsg["PAYLOAD"]["TYPE"] = RIC_CONTROL_ACKNOWLEDGE;
+                    ackMsg["PAYLOAD"]["SERVICE_MODEL"] = E2SM_RC;
+                    SendPayload(ackMsg);
+                }
+                break;
+
+                default:
+                    NS_LOG_WARN("[E2SM-RC] Unimplemented RRAC action: "
+                                << (int)controlHeader.contents.format_1.ControlActionID);
+                    break;
+                }
+                break;
             break;
         case RIC_CONTROL_SERVICE_STYLES::CONNECTED_MODE_MOBILITY_CONTROL::VALUE:
             switch (controlHeader.contents.format_1.ControlActionID)
@@ -357,22 +408,22 @@ E2AP::HandleE2SmRcControlRequest(std::string& src_endpoint,
                     handoverTriggeringTrace(rrc, rnti, cellId);
 
                     if (cellId != std::numeric_limits<uint16_t>::max())
-{
-    // IMSI=MAX 상황의 근본 원인: UE manager가 없음
-    if (!rrc->HasUeManager(rnti))
-    {
-        NS_LOG_WARN(GetRootEndpoint()
-                    << " drop RIC HO control: no UE manager for RNTI=" << rnti
-                    << " targetCellId=" << cellId);
-        return;
-    }
-    rrc->DoTriggerHandover(rnti, cellId);
-}
-else
-{
-    handoverCancelledTrace(rrc, rnti, cellId);
-}
-}
+                    {
+                        // IMSI=MAX 상황의 근본 원인: UE manager가 없음
+                        if (!rrc->HasUeManager(rnti))
+                        {
+                            NS_LOG_WARN(GetRootEndpoint()
+                                        << " drop RIC HO control: no UE manager for RNTI=" << rnti
+                                        << " targetCellId=" << cellId);
+                            return;
+                        }
+                        rrc->DoTriggerHandover(rnti, cellId);
+                    }
+                    else
+                    {
+                        handoverCancelledTrace(rrc, rnti, cellId);
+                    }
+                }
                 else
                 {
                     UeRntiIt->second = payload;
@@ -534,6 +585,35 @@ E2AP::E2SmRcSendCioControlRequest(Json cioList, std::string destination_endpoint
     msg["PAYLOAD"]["SERVICE_MODEL"] = E2SM_RC;
     msg["PAYLOAD"]["HEADER"] = json_hdr;
     msg["PAYLOAD"]["MESSAGE"]["CIO_LIST"] = cioList;
+
+    SendPayload(msg);
+}
+
+void
+E2AP::E2SmRcSendTxPowerControlRequest(double txPowerDbm,
+                                       std::string destination_endpoint)
+{
+    NS_LOG_FUNCTION(this << txPowerDbm << destination_endpoint);
+
+    E2SM_RC_RIC_CONTROL_HEADER hdr;
+    hdr.format = RC_CONTROL_HEADER_FORMAT_1;
+    hdr.contents.format_1.RNTI = 0;  // Cell-level control
+    hdr.contents.format_1.RICControlStyleType =
+        RIC_CONTROL_SERVICE_STYLES::RADIO_RESOURCE_ALLOCATION_CONTROL::VALUE;
+    hdr.contents.format_1.ControlActionID =
+        RIC_CONTROL_SERVICE_STYLES::RADIO_RESOURCE_ALLOCATION_CONTROL::
+            DL_TX_POWER_CONTROL::VALUE;
+    hdr.contents.format_1.RicDecision = RC_ACCEPT;
+
+    Json json_hdr;
+    to_json(json_hdr, hdr);
+
+    Json msg;
+    msg["DEST_ENDPOINT"] = destination_endpoint;
+    msg["PAYLOAD"]["TYPE"] = RIC_CONTROL_REQUEST;
+    msg["PAYLOAD"]["SERVICE_MODEL"] = E2SM_RC;
+    msg["PAYLOAD"]["HEADER"] = json_hdr;
+    msg["PAYLOAD"]["MESSAGE"]["TX_POWER"] = txPowerDbm;
 
     SendPayload(msg);
 }

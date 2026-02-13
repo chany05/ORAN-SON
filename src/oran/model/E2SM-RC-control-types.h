@@ -106,6 +106,11 @@ namespace SLICE_LEVEL_PRB_QUOTA
 {
 const uint8_t VALUE = 6; ///< E2SM RC Radio Resource Allocation Control's Slice Level PRB Quota service
 }
+
+namespace DL_TX_POWER_CONTROL
+{
+const uint8_t VALUE = 7; ///< E2SM RC Radio Resource Allocation Control's DL Tx Power Control service
+}
 } // namespace RADIO_RESOURCE_ALLOCATION_CONTROL
 
 /**
