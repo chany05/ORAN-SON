@@ -326,10 +326,10 @@ main()
 {
     GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
 
-    uint16_t numberOfUes = 12;
+    uint16_t numberOfUes = 40;
     uint16_t numberOfEnbs = 3;
+    // distance 변수 제거, isd 사용
     uint16_t numBearersPerUe = 1;
-    double distance = 80.0; // m
     double enbTxPowerDbm = 46.0;
     std::string output_csv_filename = "outputSONLB.csv";
 
@@ -396,11 +396,18 @@ main()
 
     // eNB 위치
     Ptr<ListPositionAllocator> enbPositionAlloc = CreateObject<ListPositionAllocator>();
-    for (uint16_t i = 1; i < numberOfEnbs + 1; i++)
-    {
-        Vector enbPosition(distance * (i + 1), distance, 0);
-        enbPositionAlloc->Add(enbPosition);
-    }
+    // === 변경 (hexagonal 정삼각형, ISD=500m) ===
+    double isd = 200.0;
+    // eNB1: 꼭짓점 위
+    // eNB2: 왼쪽 아래
+    // eNB3: 오른쪽 아래
+    double cx = 500.0;  // 삼각형 중심 x
+    double cy = 644.0;  // 삼각형 중심 y (= 500 + isd/√3 ≈ 500 + 288.7 * 0.5)
+    double height = isd * std::sqrt(3.0) / 2.0;  // 삼각형 높이 = 173m
+
+    enbPositionAlloc->Add(Vector(cx, cy + height / 3.0, 0));           // eNB1 (500, 788)
+    enbPositionAlloc->Add(Vector(cx - isd / 2.0, cy - height * 2.0 / 3.0, 0)); // eNB2 (250, 355)
+    enbPositionAlloc->Add(Vector(cx + isd / 2.0, cy - height * 2.0 / 3.0, 0)); // eNB3 (750, 355)
     MobilityHelper enbMobility;
     enbMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     enbMobility.SetPositionAllocator(enbPositionAlloc);
@@ -408,16 +415,43 @@ main()
 
     // UE 위치: 전부 eNB2(1200,400) 근처에 격자 배치
     Ptr<ListPositionAllocator> uePositionAlloc = CreateObject<ListPositionAllocator>();
-    double eNB2_x = distance * 3; 
-    double eNB2_y = distance;    
+    // UE 배치: eNB2 (250, 355) 근처, 반경 30~150m
+    double ueCenterX = 400.0;   // eNB2 x
+    double ueCenterY = 528.0;   // eNB2 y
+    double minRadius = 30.0;
+    double maxRadius = 40.0;   // 150 → 80으로 축소
+
+    Ptr<UniformRandomVariable> randRadius = CreateObject<UniformRandomVariable>();
+    randRadius->SetAttribute("Min", DoubleValue(minRadius));
+    randRadius->SetAttribute("Max", DoubleValue(maxRadius));
+
+    Ptr<UniformRandomVariable> randAngle = CreateObject<UniformRandomVariable>();
+    randAngle->SetAttribute("Min", DoubleValue(0.0));
+    randAngle->SetAttribute("Max", DoubleValue(2.0 * M_PI));
+
     for (uint16_t i = 0; i < numberOfUes; i++)
     {
-        double offsetX = (i / 4) * 40.0 - 40.0;  // -40, 0, +40
-        double offsetY = (i % 4) * 20.0 - 30.0;  // -30, -10, 10, +30
-        uePositionAlloc->Add(Vector(eNB2_x + offsetX, eNB2_y + offsetY, 0));
+        double r = randRadius->GetValue();
+        double theta = randAngle->GetValue();
+        double ueX = ueCenterX + r * std::cos(theta);
+        double ueY = ueCenterY + r * std::sin(theta);
+        uePositionAlloc->Add(Vector(ueX, ueY, 0));
     }
     MobilityHelper ueMobility;
-    ueMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    // 삼각형 전체를 커버하는 범위
+    // eNB1 (cx, cy+h/3), eNB2 (cx-isd/2, cy-2h/3), eNB3 (cx+isd/2, cy-2h/3)
+    // 여유를 줘서 eNB 배치 영역 + 100m 패딩
+
+    double minX = (cx - isd / 2.0) - 100.0;   // eNB2 x - 100
+    double maxX = (cx + isd / 2.0) + 100.0;   // eNB3 x + 100
+    double minY = (cy - height * 2.0 / 3.0) - 100.0;  // eNB2,3 y - 100
+    double maxY = (cy + height / 3.0) + 100.0;         // eNB1 y + 100
+
+    ueMobility.SetMobilityModel("ns3::RandomWalk2dMobilityModel",
+    "Bounds", RectangleValue(Rectangle(minX, maxX, minY, maxY)),
+    "Speed", StringValue("ns3::ConstantRandomVariable[Constant=25.0]"),  // 3 m/s (빠른 보행)
+    "Direction", StringValue("ns3::UniformRandomVariable[Min=0|Max=6.283185]"),
+    "Distance", DoubleValue(30.0));  // 30m마다 방향 전환
     ueMobility.SetPositionAllocator(uePositionAlloc);
     ueMobility.Install(ueNodes);
 
@@ -432,13 +466,14 @@ main()
     ueIpIfaces = epcHelper->AssignUeIpv4Address(NetDeviceContainer(ueLteDevs));
 
     // ★ UE 12개 전부 eNB1에 강제 연결 (극단적 과부하)
+    // 강제 연결 복구 (eNB2, 인덱스 1)
     for (uint16_t i = 0; i < numberOfUes; i++) {
-    Ptr<NetDevice> ueDev = ueLteDevs.Get(i);
-    Ptr<NetDevice> enbDev = enbLteDevs.Get(1);
-    Simulator::Schedule(Seconds(i*0.1), [lteHelper, ueDev, enbDev]() {
-        lteHelper->Attach(ueDev, enbDev);
-    });
-    }   
+        Ptr<NetDevice> ueDev = ueLteDevs.Get(i);
+        Ptr<NetDevice> enbDev = enbLteDevs.Get(1);  // eNB2
+        Simulator::Schedule(Seconds(3.0 + i * 0.1), [lteHelper, ueDev, enbDev]() {
+            lteHelper->Attach(ueDev, enbDev);
+        });
+    }
 
     NS_LOG_LOGIC("setting up applications");
 
@@ -547,29 +582,29 @@ main()
 
     enbNodes.Get(0)->AddApplication(&e2n1);
 
-    Simulator::Schedule(Seconds(0.5), &E2AP::Connect, &e2t);
-    Simulator::Schedule(Seconds(1.0), &E2AP::Connect, &e2n1);
-    Simulator::Schedule(Seconds(1.5), &E2AP::SendE2SetupRequest, &e2n1);
+    Simulator::Schedule(Seconds(1.0), &E2AP::Connect, &e2t);
+    Simulator::Schedule(Seconds(1.5), &E2AP::Connect, &e2n1);
+    Simulator::Schedule(Seconds(2.0), &E2AP::SendE2SetupRequest, &e2n1);
     //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n1);
     //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n1);
 
     E2AP e2n2;
     enbNodes.Get(1)->AddApplication(&e2n2);
-    Simulator::Schedule(Seconds(1.0), &E2AP::Connect, &e2n2);
-    Simulator::Schedule(Seconds(1.5), &E2AP::SendE2SetupRequest, &e2n2);
+    Simulator::Schedule(Seconds(1.5), &E2AP::Connect, &e2n2);
+    Simulator::Schedule(Seconds(2.0), &E2AP::SendE2SetupRequest, &e2n2);
     //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n2);
     //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n2);
 
     E2AP e2n3;
     enbNodes.Get(2)->AddApplication(&e2n3);
     Simulator::Schedule(Seconds(1.0), &E2AP::Connect, &e2n3);
-    Simulator::Schedule(Seconds(1.5), &E2AP::SendE2SetupRequest, &e2n3);
+    Simulator::Schedule(Seconds(2.0), &E2AP::SendE2SetupRequest, &e2n3);
     //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n3);
     //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n3);
 
     // 수동 핸드오버 없음 — SON 자체 부하분산만
 
-    Simulator::Stop(Seconds(25.0));
+    Simulator::Stop(Seconds(300.0));
     Simulator::Run();
     std::ofstream csvOutput(output_csv_filename);
     csvOutput << "Time (ns),IMSI,SrcCellId,RNTI,TrgtCellId,Type," << std::endl;

@@ -17,7 +17,7 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
     : xAppHandover(),
       m_sonPeriodicitySec(sonPeriodicitySec),
       m_initiateHandovers(initiateHandovers),
-      m_cellRadius(50.0),
+      m_cellRadius(289.0),
       m_edgeThreshold(0.7),
       m_loadThreshold(12.0),
       m_rsrqThreshold(-15.0),
@@ -55,10 +55,17 @@ xAppHandoverSON::PeriodicSONCheck()
     static bool cioApplied = false;
     if (!cioApplied)
     {
-        cioApplied = true;
         NS_LOG_UNCOND("[SON-CIO] Applying test CIO values (Cell2 overloaded)");
 
         E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
+        if (!ric)
+        {
+            NS_LOG_UNCOND("[SON] E2AP not ready, retrying in " << m_sonPeriodicitySec << "s");
+            Simulator::Schedule(Seconds(m_sonPeriodicitySec),
+                                &xAppHandoverSON::PeriodicSONCheck, this);
+            return;
+        }
+        cioApplied = true;
         if (ric)
         {
             // Cell2 과부하 → Cell1, Cell3으로 분산
@@ -72,7 +79,7 @@ xAppHandoverSON::PeriodicSONCheck()
                 Json::array({{{"CELL_ID", 2}, {"CIO_VALUE", -6}},
                              {{"CELL_ID", 3}, {"CIO_VALUE", 6}}}),
                 "/E2Node/1/");
-            ric->E2SmRcSendTxPowerControlRequest(40.0, "/E2Node/2/");
+            ric->E2SmRcSendTxPowerControlRequest(46.0, "/E2Node/2/");
 
             // eNB2에: 이웃 CIO (Cell1=+6, Cell3=+6)
             ric->E2SmRcSendCioControlRequest(

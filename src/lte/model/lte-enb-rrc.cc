@@ -1904,7 +1904,7 @@ UeManager::BuildRrcConnectionReconfiguration()
     {
         msg.haveNonCriticalExtension = false;
     }
-    NS_LOG_UNCOND("[MEASCONFIG] RNTI=" << m_rnti << " measIds=" << msg.measConfig.measIdToAddModList.size());
+    NS_LOG_LOGIC("[MEASCONFIG] RNTI=" << m_rnti << " measIds=" << msg.measConfig.measIdToAddModList.size());
     return msg;
 }
 

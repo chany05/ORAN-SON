@@ -54,3 +54,6 @@ cmake-build-release/
 src/oran/examples/TestSONXappLB.cc
 .~lock.outputSONLB.csv#
 1
+src/oran/model/xAppRLSON.cc
+.gitignore
+src/oran/model/xAppRLSON.h
