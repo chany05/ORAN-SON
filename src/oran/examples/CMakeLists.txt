@@ -101,18 +101,18 @@ if(NOT(${ARMADILLO} STREQUAL ARMADILLO-NOTFOUND) AND NOT(${MLPACK} STREQUAL MLPA
             ${libapplications}
             IGNORE_PCH TRUE
     )
-    build_lib_example(
-            NAME TestHandoverXappMLPACKReinforcedLearning
-            SOURCE_FILES TestHandoverXappMLPACKReinforcedLearning.cc
-            LIBRARIES_TO_LINK
-            ${libcore}
-            ${libmobility}
-            ${libpoint-to-point}
-            ${liblte}
-            ${liboran}
-            ${libapplications}
-            IGNORE_PCH TRUE
-    )
+#    build_lib_example(
+#            NAME TestHandoverXappMLPACKReinforcedLearning
+#            SOURCE_FILES TestHandoverXappMLPACKReinforcedLearning.cc
+#            LIBRARIES_TO_LINK
+#            ${libcore}
+#            ${libmobility}
+#            ${libpoint-to-point}
+#            ${liblte}
+#            ${liboran}
+#            ${libapplications}
+#            IGNORE_PCH TRUE
+#    )
     build_lib_example(
             NAME HandoverXappsScenario
             SOURCE_FILES HandoverXappsScenario.cc
@@ -139,10 +139,10 @@ if(NOT(${ARMADILLO} STREQUAL ARMADILLO-NOTFOUND) AND NOT(${MLPACK} STREQUAL MLPA
         ${libinternet}
     )
     target_compile_options(TestHandoverXappMLPACK PUBLIC -fopenmp)
-    target_compile_options(TestHandoverXappMLPACKReinforcedLearning PUBLIC -fopenmp)
+    #target_compile_options(TestHandoverXappMLPACKReinforcedLearning PUBLIC -fopenmp)
     target_compile_options(HandoverXappsScenario PUBLIC -fopenmp)
     target_link_options(TestHandoverXappMLPACK PUBLIC -fopenmp)
-    target_link_options(TestHandoverXappMLPACKReinforcedLearning PUBLIC -fopenmp)
+    #target_link_options(TestHandoverXappMLPACKReinforcedLearning PUBLIC -fopenmp)
     target_link_options(HandoverXappsScenario PUBLIC -fopenmp)
 
 endif()

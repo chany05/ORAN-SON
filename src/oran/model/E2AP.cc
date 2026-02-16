@@ -867,15 +867,7 @@ E2AP::QueryKpmMetric(std::string metric)
     auto it = m_kpmToEndpointStorage.find(metric);
     if (it == m_kpmToEndpointStorage.end())
         return std::map<std::string, std::deque<PeriodicMeasurementStruct>>();
-    auto result = it->second;     // 복사
-    
-    // ★ 읽은 후 클리어
-    for (auto& [endpoint, deque] : it->second)
-    {
-        deque.clear();
-    }
-    
-    return result;
+    return it->second;  // 복사만, clear 안 함
 }
 
 Json

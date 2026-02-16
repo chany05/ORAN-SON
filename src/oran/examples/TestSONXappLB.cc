@@ -351,7 +351,7 @@ main()
     lteHelper->SetSchedulerType("ns3::RrFfMacScheduler");
 
     lteHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
-    lteHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(0.0));   // 3dB
+    lteHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(1.0));   // 3dB
     lteHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(256)));
 
     Ptr<Node> pgw = epcHelper->GetPgwNode();
@@ -604,7 +604,11 @@ main()
 
     // 수동 핸드오버 없음 — SON 자체 부하분산만
 
-    Simulator::Stop(Seconds(300.0));
+    // TestSONXappLB.cc에서 Simulator::Stop 직전에
+    Simulator::Schedule(Seconds(599.0), [&sonxapp]() {
+        sonxapp.SaveModels();
+    });
+    Simulator::Stop(Seconds(600.0));
     Simulator::Run();
     std::ofstream csvOutput(output_csv_filename);
     csvOutput << "Time (ns),IMSI,SrcCellId,RNTI,TrgtCellId,Type," << std::endl;
