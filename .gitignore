@@ -64,3 +64,6 @@ src/oran/model/xAppRLSON.cc
 .gitignore
 src/oran/model/xAppRLSON.h
 buil/CMakeFiles/run-introspected-command-line.dir/build.make
+Makefile*
+cmake.*
+*.bin
