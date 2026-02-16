@@ -63,7 +63,17 @@ xAppHandoverSON::PeriodicSONCheck()
         << " cell 3: " << m_cellContexts[3].ueCount);
     NS_LOG_LOGIC("[SON] === Periodic Check === UEs=" << m_ueContexts.size()
         << " Cells=" << m_cellContexts.size());
-
+    for (auto& [key, ue] : m_ueContexts)
+    {
+        NS_LOG_UNCOND("[SON]   UE RNTI=" << ue.rnti
+            << " Cell=" << ue.servingCellId
+            << " RSRP=" << ue.servingRsrp
+            << " RSRQ=" << ue.servingRsrq
+            << " CQI=" << ue.cqi
+            << " DL=" << ue.throughputDl << "kbps"
+            << " UL=" << ue.throughputUl << "kbps"
+            << " TxPower=" << m_cellContexts[ue.servingCellId].txPower << "dBm");
+    }
     // 2. Edge UE 계산 (기존 로직 그대로)
     CalculateEdgeUEs();
 
@@ -138,8 +148,9 @@ xAppHandoverSON::CollectKPMs()
     CollectCqi();
     CollectThroughput();
     CollectUeCount();
+    CollectCellThroughput();  // ★ 추가: 셀 단위 DL+UL throughput 집계
 
-    PurgeStaleUeContexts();  // ★ 추가
+    PurgeStaleUeContexts();
 }
 
 void
@@ -389,6 +400,36 @@ xAppHandoverSON::CollectUeCount()
     }
 }
 
+void
+xAppHandoverSON::CollectCellThroughput()
+{
+    NS_LOG_FUNCTION(this);
+
+    for (auto& [cellId, cell] : m_cellContexts)
+    {
+        cell.totalThroughputDl = 0.0;
+        cell.totalThroughputUl = 0.0;
+    }
+
+    for (auto& [key, ue] : m_ueContexts)
+    {
+        uint16_t cellId = ue.servingCellId;
+        auto it = m_cellContexts.find(cellId);
+        if (it != m_cellContexts.end())
+        {
+            it->second.totalThroughputDl += ue.throughputDl;
+            it->second.totalThroughputUl += ue.throughputUl;
+        }
+    }
+
+    for (auto& [cellId, cell] : m_cellContexts)
+    {
+        NS_LOG_LOGIC("[KPM] Cell" << cellId
+            << " DL=" << (cell.totalThroughputDl / 1e6) << "Mbps"
+            << " UL=" << (cell.totalThroughputUl / 1e6) << "Mbps"
+            << " UEs=" << cell.ueCount);
+    }
+}
 // =============================================================================
 // Edge UE 계산
 // =============================================================================
@@ -789,16 +830,15 @@ xAppHandoverSON::InitMADDPG()
 {
     NS_LOG_FUNCTION(this);
 
-    // 셀 토폴로지 설정 (hexagonal 3셀)
-    // 왜 필요한가: 각 에이전트가 자신의 이웃을 알아야 행동 차원(이웃 수)과
-    // 관측 벡터의 이웃 정보 슬롯을 올바르게 매핑할 수 있음.
     m_cellIds = {1, 2, 3};
     m_neighborMap[1] = {2, 3};
     m_neighborMap[2] = {1, 3};
     m_neighborMap[3] = {1, 2};
 
-    int64_t totalObsDim = NUM_AGENTS * OBS_DIM;  // 3 × 8 = 24
-    int64_t totalActDim = NUM_AGENTS * ACT_DIM;  // 3 × 2 = 6
+    // 논문: Critic = 전체 에이전트 state + action 결합
+    // totalObsDim = 3 × 4 = 12, totalActDim = 3 × 2 = 6
+    int64_t totalObsDim = NUM_AGENTS * OBS_DIM;
+    int64_t totalActDim = NUM_AGENTS * ACT_DIM;
 
     for (auto cellId : m_cellIds)
     {
@@ -809,15 +849,16 @@ xAppHandoverSON::InitMADDPG()
         config.neighborCellIds = m_neighborMap[cellId];
 
         m_agents.push_back(std::make_unique<MADDPGAgent>(
-            config, totalObsDim, totalActDim, ACTOR_LR, CRITIC_LR));
+            config, totalObsDim, totalActDim, LR, MAX_ACTION));
     }
 
     m_replayBuffer = std::make_unique<ReplayBuffer>(BUFFER_SIZE);
 
     NS_LOG_UNCOND("[MADDPG] Initialized: " << NUM_AGENTS << " agents, "
         << "Obs=" << OBS_DIM << " Act=" << ACT_DIM
-        << " CriticInput=" << (totalObsDim + totalActDim));
-    // 기존 학습 모델 로드 (있으면)
+        << " CriticInput=" << (totalObsDim + totalActDim)
+        << " MaxAction=" << MAX_ACTION);
+
     if (m_loadPretrained)
     {
         LoadModels();
@@ -844,6 +885,9 @@ xAppHandoverSON::InitMADDPG()
 //   [20/40, 8e6/20e6, 12/15, 0.3, 10/40, 13/15, 10/40, 14/15]
 //   = [0.5, 0.4, 0.8, 0.3, 0.25, 0.87, 0.25, 0.93]
 
+// 논문 Eq.(2): s_i = [C_i, T_i, N_i, E_i]
+// 논문 코드: eNB_state = [AvgCqi, Throughput, FarUes, ServedUes]
+// 정규화 없이 raw 값 사용 (논문 코드와 동일)
 torch::Tensor
 xAppHandoverSON::BuildObservation(uint16_t cellId)
 {
@@ -858,15 +902,7 @@ xAppHandoverSON::BuildObservation(uint16_t cellId)
 
     const auto& cell = cellIt->second;
 
-    // [0] UE 수 정규화
-    obs[0] = static_cast<float>(cell.ueCount) / m_totalUEs;
-
-    // [1] 총 DL throughput 정규화
-    // PRB 25 × 12 subcarrier × 14 OFDM/ms × 6bit(64QAM) ≈ 18Mbps 이론 최대
-    static constexpr float MAX_THR = 20.0e6f;
-    obs[1] = std::min(static_cast<float>(cell.totalThroughputDl) / MAX_THR, 1.0f);
-
-    // [2] 평균 CQI — 수집된 per-UE 데이터 기반
+    // [0] AvgCqi — C_i
     float avgCqi = 0.0f;
     uint32_t cqiCount = 0;
     uint32_t edgeCount = 0;
@@ -883,36 +919,17 @@ xAppHandoverSON::BuildObservation(uint16_t cellId)
         }
     }
     if (cqiCount > 0) avgCqi /= cqiCount;
-    obs[2] = avgCqi / 15.0f;
+    obs[0] = avgCqi;
 
-    // [3] Edge UE 비율
-    obs[3] = (ueWithData > 0)
+    // [1] Throughput — T_i (Mbps)
+    obs[1] = static_cast<float>(cell.totalThroughputDl / 1e6);
+
+    // [2] FarUes — E_i (edge UE 비율)
+    obs[2] = (ueWithData > 0)
         ? static_cast<float>(edgeCount) / ueWithData : 0.0f;
 
-    // [4~7] 이웃 셀 정보
-    const auto& neighbors = m_neighborMap[cellId];
-    for (size_t n = 0; n < 2 && n < neighbors.size(); n++)
-    {
-        uint16_t nId = neighbors[n];
-        auto nIt = m_cellContexts.find(nId);
-        if (nIt != m_cellContexts.end())
-        {
-            obs[4 + 2*n] = static_cast<float>(nIt->second.ueCount) / m_totalUEs;
-
-            float nAvgCqi = 0.0f;
-            uint32_t nCount = 0;
-            for (auto& [key, ue] : m_ueContexts)
-            {
-                if (ue.servingCellId == nId)
-                {
-                    nAvgCqi += ue.cqi;
-                    nCount++;
-                }
-            }
-            if (nCount > 0) nAvgCqi /= nCount;
-            obs[5 + 2*n] = nAvgCqi / 15.0f;
-        }
-    }
+    // [3] ServedUes — N_i (UE 수)
+    obs[3] = static_cast<float>(cell.ueCount);
 
     return torch::from_blob(obs.data(), {OBS_DIM}, torch::kFloat32).clone();
 }
@@ -936,25 +953,25 @@ xAppHandoverSON::BuildObservation(uint16_t cellId)
 //   [Cell1: 6, Cell2: 6, Cell3: 6] → min=6, avg=6
 //   r = 0.5×(6/20) + 0.5×(6/20) = 0.15 + 0.15 = 0.3  (개선됨)
 
-double
-xAppHandoverSON::ComputeReward()
+// 논문 Eq.(7): r_i = Σ R_k (per-agent 셀 throughput)
+// 논문 코드: R_rewards = Throughput[2:5], 각 에이전트에 자기 셀 throughput 할당
+std::vector<double>
+xAppHandoverSON::ComputeRewards()
 {
-    static constexpr double MAX_THR = 20.0e6;
-
-    double minThp = std::numeric_limits<double>::max();
-    double sumThp = 0.0;
-    int count = 0;
-
-    for (auto& [cellId, cell] : m_cellContexts)
+    std::vector<double> rewards;
+    for (auto cellId : m_cellIds)
     {
-        double normThp = cell.totalThroughputDl / MAX_THR;
-        minThp = std::min(minThp, normThp);
-        sumThp += normThp;
-        count++;
+        auto it = m_cellContexts.find(cellId);
+        if (it != m_cellContexts.end())
+        {
+            rewards.push_back(it->second.totalThroughputDl / 1e6);  // Mbps
+        }
+        else
+        {
+            rewards.push_back(0.0);
+        }
     }
-
-    if (count == 0) return 0.0;
-    return REWARD_ALPHA * minThp + REWARD_BETA * (sumThp / count);
+    return rewards;
 }
 
 // =============================================================================
@@ -984,14 +1001,14 @@ xAppHandoverSON::StepMADDPG()
         currentObs.push_back(BuildObservation(m_agents[i]->GetConfig().cellId));
     }
 
-    // ── 이전 전이(transition)를 replay buffer에 저장 ──
+    // ── 이전 전이를 replay buffer에 저장 ──
     if (m_hasPrevStep)
     {
-        double reward = ComputeReward();
+        auto rewards = ComputeRewards();
         Experience exp;
         exp.obs = m_prevObs;
         exp.acts = m_prevActs;
-        exp.reward = reward;
+        exp.rewards = rewards;
         exp.nextObs = currentObs;
         exp.done = false;
         m_replayBuffer->Push(std::move(exp));
@@ -999,50 +1016,104 @@ xAppHandoverSON::StepMADDPG()
         if (m_stepCount % 10 == 0)
         {
             NS_LOG_UNCOND("[MADDPG] Step=" << m_stepCount
-                << " Reward=" << reward
-                << " BufferSize=" << m_replayBuffer->Size());
+                << " Rewards=[" << rewards[0] << ", "
+                << rewards[1] << ", " << rewards[2] << "]"
+                << " BufferSize=" << m_replayBuffer->Size()
+                << " Epsilon=" << m_epsilon);
         }
     }
 
-    // ── Actor로 행동 선택 ──
+    // ── 행동 선택 ──
     std::vector<torch::Tensor> currentActs;
 
     E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
     if (!ric) return;
 
+    // 논문 코드: epsilon-greedy + 가우시안 노이즈
+    static std::mt19937 rng(std::random_device{}());
+    static std::uniform_real_distribution<double> uniformDist(0.0, 1.0);
+    static std::uniform_real_distribution<double> randomAction(-MAX_ACTION, MAX_ACTION);
+    std::normal_distribution<double> noiseDist(0.0, MAX_ACTION * EXPL_NOISE);
+
     for (size_t i = 0; i < m_agents.size(); i++)
     {
-        bool explore = !m_inferenceOnly;
-        auto act = m_agents[i]->SelectAction(currentObs[i], explore);
-        currentActs.push_back(act);
-
-        // ── 행동 → CIO 변환 + E2SM-RC 전송 ──
-        auto actData = act.accessor<float, 1>();
-        const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
+        torch::Tensor act;
         uint16_t srcCell = m_agents[i]->GetConfig().cellId;
 
-        Json cioList = Json::array();
-        for (size_t n = 0; n < neighbors.size() && n < 2; n++)
+        if (!m_inferenceOnly && uniformDist(rng) <= m_epsilon)
         {
-            double cioDB = static_cast<double>(actData[n]) * MAX_CIO_DB;
-
-            // 3GPP TS 36.331 §6.3.6: q-OffsetCell IE, 0.5dB 단위
-            int cioIE = static_cast<int>(std::round(cioDB / 0.5));
-            cioIE = std::max(-12, std::min(12, cioIE));
-
-            Json entry;
-            entry["CELL_ID"] = neighbors[n];
-            entry["CIO_VALUE"] = cioIE;
-            cioList.push_back(entry);
-
-            NS_LOG_LOGIC("[MADDPG] Cell" << srcCell
-                << "→Neighbor" << neighbors[n]
-                << " act=" << actData[n]
-                << " CIO=" << (cioIE * 0.5) << "dB (IE=" << cioIE << ")");
+            // ε-greedy: 랜덤 행동
+            std::vector<float> randAct(ACT_DIM);
+            for (int d = 0; d < ACT_DIM; d++)
+                randAct[d] = static_cast<float>(randomAction(rng));
+            act = torch::from_blob(randAct.data(), {ACT_DIM}, torch::kFloat32).clone();
+        }
+        else if (!m_inferenceOnly)
+        {
+            // Actor + 가우시안 노이즈
+            act = m_agents[i]->SelectAction(currentObs[i]);
+            std::vector<float> noise(ACT_DIM);
+            for (int d = 0; d < ACT_DIM; d++)
+                noise[d] = static_cast<float>(noiseDist(rng));
+            auto noiseTensor = torch::from_blob(noise.data(), {ACT_DIM}, torch::kFloat32).clone();
+            act = torch::clamp(act + noiseTensor,
+                              -static_cast<float>(MAX_ACTION),
+                               static_cast<float>(MAX_ACTION));
+        }
+        else
+        {
+            // Inference: 노이즈 없이 Actor만
+            act = m_agents[i]->SelectAction(currentObs[i]);
         }
 
+        currentActs.push_back(act);
+
+        auto actData = act.accessor<float, 1>();
+        const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
+
+        // ── [0] CIO 변환 ──
+        // 논문 코드: env_action1 = round(action[0] * 0.5, 0) → 정수 dB
+        // 3GPP TS 36.331 §6.3.6: q-OffsetCell
+        // 글로벌 CIO: 모든 이웃에 동일 값 적용
+        //
+        // 숫자 예시: action[0]=4.2 → 4.2×0.5=2.1 → round=2 dB → IE=4
+        //           action[0]=-6.0 → -6.0×0.5=-3.0 → -3 dB → IE=-6
+        int cioDB = static_cast<int>(std::round(actData[0] * 0.5));
+        cioDB = std::max(-6, std::min(6, cioDB));
+        int cioIE = cioDB * 2;  // dB → IE (0.5dB 단위): dB / 0.5 = dB × 2
+
+        Json cioList = Json::array();
+        for (auto nId : neighbors)
+        {
+            Json entry;
+            entry["CELL_ID"] = nId;
+            entry["CIO_VALUE"] = cioIE;
+            cioList.push_back(entry);
+        }
         std::string endpoint = "/E2Node/" + std::to_string(srcCell) + "/";
         ric->E2SmRcSendCioControlRequest(cioList, endpoint);
+
+        // ── [1] TXP 변환 ──
+        // 논문 코드: env_action2 = round(action[1], 4) → dBm offset
+        // 기본 TXP에 offset 적용, clamp [30, 46]
+        //
+        // 숫자 예시: action[1]=3.5 → TXP=46+3.5=49.5 → clamp→46.0
+        //           action[1]=-5.0 → TXP=46-5.0=41.0
+        double txpOffset = static_cast<double>(actData[1]);
+        double txpApplied = m_txPower + txpOffset;
+        txpApplied = std::max(30.0, std::min(46.0, txpApplied));
+
+        ric->E2SmRcSendTxPowerControlRequest(txpApplied, endpoint);
+
+        NS_LOG_UNCOND("[MADDPG] Cell" << srcCell
+            << " CIO=" << cioDB << "dB(IE=" << cioIE << ")"
+            << " TXP=" << txpApplied << "dBm(offset=" << txpOffset << ")");
+    }
+
+    // ── epsilon 감소 ──
+    if (m_epsilon > EPSILON_END)
+    {
+        m_epsilon *= EPSILON_DECAY;
     }
 
     // ── 다음 스텝을 위해 저장 ──
@@ -1076,10 +1147,10 @@ xAppHandoverSON::TrainMADDPG()
 {
     NS_LOG_FUNCTION(this);
 
-    if (m_replayBuffer->Size() < WARMUP_STEPS)
+    if (m_replayBuffer->Size() < BATCH_SIZE)
     {
         NS_LOG_LOGIC("[MADDPG] Warmup: " << m_replayBuffer->Size()
-            << "/" << WARMUP_STEPS);
+            << "/" << BATCH_SIZE);
         return;
     }
 
@@ -1090,28 +1161,29 @@ xAppHandoverSON::TrainMADDPG()
     std::vector<torch::Tensor> obsBatch(NUM_AGENTS);
     std::vector<torch::Tensor> actsBatch(NUM_AGENTS);
     std::vector<torch::Tensor> nextObsBatch(NUM_AGENTS);
-    torch::Tensor rewardBatch = torch::zeros({(long)B, 1});
+    std::vector<torch::Tensor> rewardBatch(NUM_AGENTS);
 
     for (int a = 0; a < NUM_AGENTS; a++)
     {
         std::vector<torch::Tensor> oVec, aVec, noVec;
+        rewardBatch[a] = torch::zeros({(long)B, 1});
+
         for (size_t b = 0; b < B; b++)
         {
             oVec.push_back(batch[b].obs[a]);
             aVec.push_back(batch[b].acts[a]);
             noVec.push_back(batch[b].nextObs[a]);
+            rewardBatch[a][b][0] = batch[b].rewards[a];
         }
-        obsBatch[a] = torch::stack(oVec);       // (B, obsDim)
-        actsBatch[a] = torch::stack(aVec);       // (B, actDim)
-        nextObsBatch[a] = torch::stack(noVec);   // (B, obsDim)
+        obsBatch[a] = torch::stack(oVec);       // (B, 4)
+        actsBatch[a] = torch::stack(aVec);       // (B, 2)
+        nextObsBatch[a] = torch::stack(noVec);   // (B, 4)
     }
-    for (size_t b = 0; b < B; b++)
-        rewardBatch[b][0] = batch[b].reward;
 
-    // 전체 결합
-    auto allObs     = torch::cat(obsBatch, 1);       // (B, 24)
+    // 전체 결합 (dim=1 — 논문 코드 버그 수정)
+    auto allObs     = torch::cat(obsBatch, 1);       // (B, 12)
     auto allActs    = torch::cat(actsBatch, 1);       // (B, 6)
-    auto allNextObs = torch::cat(nextObsBatch, 1);    // (B, 24)
+    auto allNextObs = torch::cat(nextObsBatch, 1);    // (B, 12)
 
     // Target 행동 계산
     std::vector<torch::Tensor> targetNextActs;
@@ -1128,12 +1200,12 @@ xAppHandoverSON::TrainMADDPG()
     {
         auto& agent = m_agents[i];
 
-        // ─ Critic 업데이트 ─
+        // ─ Critic 업데이트 — 논문 Eq.(8)(9) ─
         torch::Tensor targetQ;
         {
             torch::NoGradGuard noGrad;
             targetQ = agent->GetTargetCritic()->forward(allNextObs, allTargetNextActs);
-            targetQ = rewardBatch + GAMMA * targetQ;
+            targetQ = rewardBatch[i] + GAMMA * targetQ;
         }
 
         auto currentQ = agent->GetCritic()->forward(allObs, allActs);
@@ -1141,12 +1213,9 @@ xAppHandoverSON::TrainMADDPG()
 
         agent->GetCriticOpt().zero_grad();
         criticLoss.backward();
-        torch::nn::utils::clip_grad_norm_(agent->GetCritic()->parameters(), 0.5);
         agent->GetCriticOpt().step();
 
-        // ─ Actor 업데이트 ─
-        // 에이전트 i의 행동만 현재 Actor로 교체 (미분 가능)
-        // 나머지 에이전트의 행동은 detach (gradient 차단)
+        // ─ Actor 업데이트 — 논문 Eq.(10) ─
         std::vector<torch::Tensor> policyActs;
         for (int j = 0; j < NUM_AGENTS; j++)
         {
@@ -1157,22 +1226,19 @@ xAppHandoverSON::TrainMADDPG()
         }
         auto allPolicyActs = torch::cat(policyActs, 1);
 
-        // -Q 최대화 → loss = -mean(Q)
         auto actorLoss = -agent->GetCritic()->forward(
             allObs.detach(), allPolicyActs).mean();
 
         agent->GetActorOpt().zero_grad();
         actorLoss.backward();
-        torch::nn::utils::clip_grad_norm_(agent->GetActor()->parameters(), 0.5);
         agent->GetActorOpt().step();
 
-        // ─ Target Soft Update ─
+        // ─ Target Soft Update — 논문 Eq.(11)(12) ─
         agent->SoftUpdateTargets(TAU_SOFT);
 
         if (m_stepCount % 10 == 0)
         {
-            NS_LOG_UNCOND("[MADDPG] Train Step=" << m_stepCount
-                << " Agent=" << i
+            NS_LOG_UNCOND("[MADDPG] Train Agent=" << i
                 << " CriticLoss=" << criticLoss.item<float>()
                 << " ActorLoss=" << actorLoss.item<float>());
         }
