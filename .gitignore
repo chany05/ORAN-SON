@@ -2,6 +2,9 @@
 *.orig
 *.patch
 *.rej
+*.cmake
+*.make
+*.txt
 
 *.o
 *.pyc
@@ -57,3 +60,4 @@ src/oran/examples/TestSONXappLB.cc
 src/oran/model/xAppRLSON.cc
 .gitignore
 src/oran/model/xAppRLSON.h
+buil/CMakeFiles/run-introspected-command-line.dir/build.make
