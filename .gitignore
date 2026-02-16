@@ -5,6 +5,9 @@
 *.cmake
 *.make
 *.txt
+*.ts
+*.pc
+*.marks
 
 *.o
 *.pyc
