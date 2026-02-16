@@ -67,3 +67,4 @@ buil/CMakeFiles/run-introspected-command-line.dir/build.make
 Makefile*
 cmake.*
 *.bin
+*.pt
