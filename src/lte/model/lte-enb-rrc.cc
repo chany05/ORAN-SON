@@ -1515,10 +1515,14 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
                         drbInfo->m_pdcp->ResetByteCounters();
                     }
                 }
+                Time now = Simulator::Now();
+                double intervalSec = (m_lastThroughputTimestamp.IsZero())
+                    ? 0.5  // 첫 측정 시 기본값
+                    : (now - m_lastThroughputTimestamp).GetSeconds();
+                m_lastThroughputTimestamp = now;
 
-                if (totalTxBytes > 0 || totalRxBytes > 0)
+                if (intervalSec > 0 && (totalTxBytes > 0 || totalRxBytes > 0))
                 {
-                    double intervalSec = 0.48;
                     double dlKbps = (totalTxBytes * 8.0) / 1000.0 / intervalSec;
                     double ulKbps = (totalRxBytes * 8.0) / 1000.0 / intervalSec;
 

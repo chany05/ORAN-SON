@@ -341,7 +341,11 @@ main()
     std::cout << "==========================" << std::endl;
 
     Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(10)));
+    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(1200));
     Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(1000000));
+    // → 1 UE = 1200 × 8 / 0.01 = 960 kbps ≈ 1 Mbps
+    // → 셀당 13 UE = ~12.5 Mbps (셀 용량의 ~73%)
+    // → 40 UE가 한 셀에 몰리면 40 Mbps 요청 vs 17 Mbps 용량 → 확실한 병목
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
 
     Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();

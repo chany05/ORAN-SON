@@ -598,7 +598,7 @@ class UeManager : public Object
     uint16_t m_targetCellId;              ///< target cell ID
     std::list<uint8_t> m_drbsToBeStarted; ///< DRBS to be started
     bool m_needPhyMacConfiguration;       ///< need Phy MAC configuration
-
+    Time m_lastThroughputTimestamp;
     /**
      * Time limit before a _connection request timeout_ occurs. Set after a new
      * UE context is added after a successful Random Access. Calling

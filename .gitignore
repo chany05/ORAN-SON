@@ -68,3 +68,10 @@ Makefile*
 cmake.*
 *.bin
 *.pt
+*.hxx
+*.cxx
+buil/CMakeFiles/CheckIncludeFiles/HAVE_BOOST_UNITS.cpp
+buil/CMakeFiles/3.22.1/CompilerIdCXX/CMakeCXXCompilerId.cpp
+*a.out
+buil/CMakeFiles/3.22.1/CompilerIdC/CMakeCCompilerId.c
+buil/compile_commands.json
