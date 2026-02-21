@@ -19,14 +19,15 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
     : xAppHandover(),
       m_sonPeriodicitySec(sonPeriodicitySec),
       m_initiateHandovers(initiateHandovers),
-      m_cellRadius(289.0),
-      m_edgeThreshold(0.7),
+      //m_cellRadius(289.0),
+      //m_edgeThreshold(0.7),
+      m_edgeRsrpThreshold(-118.0), // ★ 237.74m 물리적 거리에 상응하는 RSRP 임계값
       m_loadThreshold(12.0),
       m_rsrqThreshold(-15.0),
       m_cqiThreshold(11),
-      m_txPower(46.0),
+      m_txPower(32.0),
       m_frequency(2.12e9),
-      m_dlBandwidthPrb(25)
+      m_dlBandwidthPrb(100)
 {
 
     NS_LOG_FUNCTION(this);
@@ -44,6 +45,7 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
     {
         InitMADDPG();
     }
+    InitCsvLoggers();
 
     Simulator::Schedule(Seconds(m_sonPeriodicitySec),
                         &xAppHandoverSON::PeriodicSONCheck,
@@ -57,6 +59,8 @@ xAppHandoverSON::PeriodicSONCheck()
 
     // 1. KPM 수집 (기존 로직 그대로)
     CollectKPMs();
+
+    LogCellMetrics();  // ★ 추가
 
     NS_LOG_LOGIC("cell 1: " << m_cellContexts[1].ueCount
         << " cell 2: " << m_cellContexts[2].ueCount
@@ -100,10 +104,11 @@ xAppHandoverSON::PeriodicSONCheck()
     else
     {
         // ── 기존 규칙 기반 경로 ──
-        CalculateLoadScores();
+        
 
         if (m_initiateHandovers)
         {
+            CalculateLoadScores();
             E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
             for (auto& [key, ue] : m_ueContexts)
             {
@@ -425,26 +430,32 @@ xAppHandoverSON::CollectCellThroughput()
     for (auto& [cellId, cell] : m_cellContexts)
     {
         NS_LOG_LOGIC("[KPM] Cell" << cellId
-            << " DL=" << (cell.totalThroughputDl / 1e6) << "Mbps"
-            << " UL=" << (cell.totalThroughputUl / 1e6) << "Mbps"
+            << " DL=" << (cell.totalThroughputDl / 1e3) << "Mbps"
+            << " UL=" << (cell.totalThroughputUl / 1e3) << "Mbps"
             << " UEs=" << cell.ueCount);
     }
 }
 // =============================================================================
 // Edge UE 계산
 // =============================================================================
-void
+void 
 xAppHandoverSON::CalculateEdgeUEs()
 {
     NS_LOG_FUNCTION(this);
 
-    for (auto& [key, ue] : m_ueContexts)
+    for (auto& [rnti, ue] : m_ueContexts)
     {
-        double distance = FriisDistanceEstimate(ue.servingRsrp, m_cellContexts[ue.servingCellId].txPower, m_frequency, ue.rnti, ue.servingCellId);
-        ue.isEdge = (distance > m_cellRadius * m_edgeThreshold);
+        // 수집된 RSRP가 임계값(-118 dBm)보다 작으면 Edge UE
+        ue.isEdge = (ue.servingRsrp < m_edgeRsrpThreshold);
+
+        // 디버깅을 위해 로그
+        NS_LOG_DEBUG("[SON-EDGE] RNTI=" << ue.rnti 
+            << " Cell=" << ue.servingCellId 
+            << " RSRP=" << ue.servingRsrp 
+            << " dBm | isEdge=" << (ue.isEdge ? "True" : "False"));
     }
 }
-
+/*
 double
 xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz, uint16_t rnti, uint16_t cellId)
 {
@@ -470,7 +481,7 @@ xAppHandoverSON::FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, doub
     NS_LOG_LOGIC("[SON-DBG] RNTI=" << rnti << " RSRP=" << rsrp_dBm
         << " d=" << d << " m");
     return d;
-}
+}*/
 
 // =============================================================================
 // 부하 계산
@@ -922,7 +933,7 @@ xAppHandoverSON::BuildObservation(uint16_t cellId)
     obs[0] = avgCqi;
 
     // [1] Throughput — T_i (Mbps)
-    obs[1] = static_cast<float>(cell.totalThroughputDl / 1e6);
+    obs[1] = static_cast<float>(cell.totalThroughputDl / 1e3);
 
     // [2] FarUes — E_i (edge UE 비율)
     obs[2] = (ueWithData > 0)
@@ -1099,15 +1110,43 @@ xAppHandoverSON::StepMADDPG()
         //
         // 숫자 예시: action[1]=3.5 → TXP=46+3.5=49.5 → clamp→46.0
         //           action[1]=-5.0 → TXP=46-5.0=41.0
-        double txpOffset = static_cast<double>(actData[1]);
-        double txpApplied = m_txPower + txpOffset;
-        txpApplied = std::max(30.0, std::min(46.0, txpApplied));
+        double rawTxpOffset = static_cast<double>(actData[1]);
+        
+        // ★ 논문과 100% 동일하게 소수점 4자리 반올림 (Python np.round(val, 4) 완벽 모사)
+        double paperTxpOffset = std::round(rawTxpOffset * 10000.0) / 10000.0;
+        
+        double txpApplied = m_txPower + paperTxpOffset;
+        txpApplied = std::max(20.0, std::min(46.0, txpApplied)); // 논문의 한계선 적용
 
         ric->E2SmRcSendTxPowerControlRequest(txpApplied, endpoint);
 
+        // 기존 로그 아래에 추가
         NS_LOG_UNCOND("[MADDPG] Cell" << srcCell
             << " CIO=" << cioDB << "dB(IE=" << cioIE << ")"
-            << " TXP=" << txpApplied << "dBm(offset=" << txpOffset << ")");
+            << " TXP=" << txpApplied << "dBm(offset=" << paperTxpOffset<< ")");
+
+        // ★ CSV 로깅
+        double now = Simulator::Now().GetSeconds();
+
+        // CIO 로그 — 각 이웃별로 기록
+        for (auto nId : neighbors)
+        {
+            m_cioActionsCsv << now << ","
+                << srcCell << "," << nId << ","
+                << cioDB << "," << cioIE << std::endl;
+        }
+
+        // MADDPG 행동 로그
+        double reward = 0.0;
+        auto cellIt = m_cellContexts.find(srcCell);
+        if (cellIt != m_cellContexts.end())
+            reward = cellIt->second.totalThroughputDl;
+
+        m_maddpgActionsCsv << now << ","
+            << srcCell << ","
+            << actData[0] << "," << actData[1] << ","
+            << cioDB << "," << txpApplied << ","
+            << reward << "," << m_epsilon << std::endl;
     }
 
     // ── epsilon 감소 ──
@@ -1281,9 +1320,14 @@ xAppHandoverSON::SaveModels(const std::string& dir)
         torch::save(m_agents[i]->GetTargetActor(), prefix + "_target_actor.pt");
         torch::save(m_agents[i]->GetTargetCritic(), prefix + "_target_critic.pt");
     }
+    // ★ 버퍼 저장 로직 추가
+    std::string bufferPath = dir + "/replay_buffer.pt";
+    m_replayBuffer->Save(bufferPath);
 
-    NS_LOG_UNCOND("[MADDPG] Models saved to " << dir
-        << "/ (step=" << m_stepCount << ")");
+    NS_LOG_UNCOND("[MADDPG] Models & Buffer saved to " << dir
+        << "/ (step=" << m_stepCount << ", BufferSize=" << m_replayBuffer->Size() << ")");
+
+
 }
 
 void
@@ -1311,5 +1355,58 @@ xAppHandoverSON::LoadModels(const std::string& dir)
         }
     }
 
-    NS_LOG_UNCOND("[MADDPG] Models loaded from " << dir << "/");
+    // ★ 버퍼 불러오기 로직 추가
+    std::string bufferPath = dir + "/replay_buffer.pt";
+    try {
+        m_replayBuffer->Load(bufferPath, OBS_DIM, ACT_DIM, NUM_AGENTS);
+        NS_LOG_UNCOND("[MADDPG] Buffer loaded successfully. Size: " << m_replayBuffer->Size());
+    } catch (const std::exception& e) {
+        NS_LOG_WARN("[MADDPG] Failed to load buffer from " << bufferPath << ": " << e.what());
+    }
+
+    NS_LOG_UNCOND("[MADDPG] Models & Buffer loaded from " << dir << "/");
+}
+
+void
+xAppHandoverSON::InitCsvLoggers()
+{
+    m_cellMetricsCsv.open("cell_metrics.csv");
+    m_cellMetricsCsv << "time_s,cellId,ueCount,edgeUeCount,totalDlThp_kbps,totalUlThp_kbps,avgCqi,txPower_dBm" << std::endl;
+
+    m_cioActionsCsv.open("cio_actions.csv");
+    m_cioActionsCsv << "time_s,srcCellId,neighborCellId,cioDB,cioIE" << std::endl;
+
+    m_maddpgActionsCsv.open("maddpg_actions.csv");
+    m_maddpgActionsCsv << "time_s,cellId,cioRawAction,txpRawAction,cioDB,txpApplied_dBm,reward,epsilon" << std::endl;
+}
+
+void
+xAppHandoverSON::LogCellMetrics()
+{
+    double now = Simulator::Now().GetSeconds();
+
+    for (auto& [cellId, cell] : m_cellContexts)
+    {
+        // 평균 CQI 계산
+        float avgCqi = 0.0f;
+        uint32_t cqiCount = 0;
+        for (auto& [key, ue] : m_ueContexts)
+        {
+            if (ue.servingCellId == cellId)
+            {
+                avgCqi += ue.cqi;
+                cqiCount++;
+            }
+        }
+        if (cqiCount > 0) avgCqi /= cqiCount;
+
+        m_cellMetricsCsv << now << ","
+            << cellId << ","
+            << cell.ueCount << ","
+            << cell.edgeUeCount << ","
+            << cell.totalThroughputDl << ","
+            << cell.totalThroughputUl << ","
+            << avgCqi << ","
+            << cell.txPower << std::endl;
+    }
 }

@@ -126,6 +126,41 @@ class ReplayBuffer
 
     size_t Size() const { return m_buffer.size(); }
 
+    // ★ 추가: 버퍼 저장
+    void Save(const std::string& filename)
+    {
+        std::vector<torch::Tensor> all_data;
+        for (const auto& exp : m_buffer) {
+            // 모든 텐서를 일렬로 붙여서 저장
+            for (auto& o : exp.obs) all_data.push_back(o);
+            for (auto& a : exp.acts) all_data.push_back(a);
+            for (auto& no : exp.nextObs) all_data.push_back(no);
+            // double형 reward도 Tensor로 변환해서 저장
+            for (auto r : exp.rewards) all_data.push_back(torch::tensor(r));
+        }
+        torch::save(all_data, filename);
+    }
+
+    // ★ 추가: 버퍼 불러오기
+    void Load(const std::string& filename, int obsDim, int actDim, int nAgents)
+    {
+        std::vector<torch::Tensor> all_data;
+        torch::load(all_data, filename);
+
+        m_buffer.clear();
+        int elements_per_exp = nAgents * 4; // obs, acts, nextObs, rewards 각각 nAgents개
+        
+        for (size_t i = 0; i < all_data.size(); i += elements_per_exp) {
+            Experience exp;
+            for (int j = 0; j < nAgents; j++) exp.obs.push_back(all_data[i + j]);
+            for (int j = 0; j < nAgents; j++) exp.acts.push_back(all_data[i + nAgents + j]);
+            for (int j = 0; j < nAgents; j++) exp.nextObs.push_back(all_data[i + 2 * nAgents + j]);
+            for (int j = 0; j < nAgents; j++) exp.rewards.push_back(all_data[i + 3 * nAgents + j].item<double>());
+            exp.done = false;
+            m_buffer.push_back(exp);
+        }
+    }
+    
   private:
     size_t m_capacity;
     std::deque<Experience> m_buffer;
@@ -235,6 +270,9 @@ class xAppHandoverSON : public xAppHandover
     void SaveModels(const std::string& dir = "maddpg_models");
     void LoadModels(const std::string& dir = "maddpg_models");
 
+    void LogCioAction(uint16_t srcCell, uint16_t neighborCell, int cioDB, int cioIE);
+    void LogMaddpgAction(uint16_t cellId, float cioAction, float txpAction,
+                        double txpApplied, double reward, double epsilon);
   private:
     using UeKey = uint32_t;
     static inline UeKey MakeUeKey(uint16_t servingCellId, uint16_t rnti)
@@ -288,13 +326,14 @@ class xAppHandoverSON : public xAppHandover
     // 설정 파라미터
     float m_sonPeriodicitySec;
     bool m_initiateHandovers;
-    double m_cellRadius;
-    double m_edgeThreshold;
+    //double m_cellRadius;
+    //double m_edgeThreshold;
     double m_loadThreshold;
     double m_rsrqThreshold;
     double m_cqiThreshold;
     double m_txPower;
     double m_frequency;
+    double m_edgeRsrpThreshold;
     uint16_t m_dlBandwidthPrb;
 
     // ── MADDPG (FineBalancer 논문 사양) ──────────────
@@ -339,6 +378,15 @@ class xAppHandoverSON : public xAppHandover
     std::vector<double> ComputeRewards();
     void StepMADDPG();
     void TrainMADDPG();
+
+    //csv logging
+    std::ofstream m_cellMetricsCsv;
+    std::ofstream m_cioActionsCsv;
+    std::ofstream m_maddpgActionsCsv;
+
+    void InitCsvLoggers();
+    void LogCellMetrics();
+
 };
 
 } // namespace oran

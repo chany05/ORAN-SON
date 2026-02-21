@@ -11,6 +11,9 @@
 #include "ns3/mobility-module.h"
 #include "ns3/point-to-point-module.h"
 #include "ns3/xAppHandoverSON.h"
+#include "ns3/config-store-module.h" 
+#include <ns3/lte-ue-net-device.h>
+#include <ns3/lte-ue-rrc.h>
 
 #include <map>
 #include <string>
@@ -326,11 +329,11 @@ main()
 {
     GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
 
-    uint16_t numberOfUes = 40;
+    // ── 변경 ──
+    uint16_t numberOfUes = 90;
     uint16_t numberOfEnbs = 3;
-    // distance 변수 제거, isd 사용
-    uint16_t numBearersPerUe = 1;
-    double enbTxPowerDbm = 46.0;
+    uint16_t numBearersPerUe = 5;
+    double enbTxPowerDbm = 32.0;
     std::string output_csv_filename = "outputSONLB.csv";
 
     std::cout << "=== Load Balancing Test ===" << std::endl;
@@ -340,23 +343,33 @@ main()
     std::cout << "  SON Period: 4s, Handover: ON" << std::endl;
     std::cout << "==========================" << std::endl;
 
-    Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(10)));
-    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(1200));
+    // ── 변경: 논문 트래픽 ──
+    Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(1)));
+    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(12));
     Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(1000000));
-    // → 1 UE = 1200 × 8 / 0.01 = 960 kbps ≈ 1 Mbps
-    // → 셀당 13 UE = ~12.5 Mbps (셀 용량의 ~73%)
-    // → 40 UE가 한 셀에 몰리면 40 Mbps 요청 vs 17 Mbps 용량 → 확실한 병목
+    Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
+    Config::SetDefault("ns3::LteEnbRrc::SrsPeriodicity", UintegerValue(80));
 
     Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
     Ptr<PointToPointEpcHelper> epcHelper = CreateObject<PointToPointEpcHelper>();
     epcHelper->SetAttribute("S1uLinkEnablePcap", BooleanValue(false));
     lteHelper->SetEpcHelper(epcHelper);
-    lteHelper->SetSchedulerType("ns3::RrFfMacScheduler");
 
+    // ── 변경: 스케줄러, 경로손실, 대역폭 ──
+    lteHelper->SetSchedulerType("ns3::PfFfMacScheduler");
+    lteHelper->SetAttribute("PathlossModel", StringValue("ns3::Cost231PropagationLossModel"));
+    lteHelper->SetSpectrumChannelType("ns3::MultiModelSpectrumChannel");
+    lteHelper->SetEnbAntennaModelType("ns3::IsotropicAntennaModel");
+    lteHelper->SetEnbDeviceAttribute("DlEarfcn", UintegerValue(100));
+    lteHelper->SetEnbDeviceAttribute("UlEarfcn", UintegerValue(18100));
+    lteHelper->SetEnbDeviceAttribute("DlBandwidth", UintegerValue(100));
+    lteHelper->SetEnbDeviceAttribute("UlBandwidth", UintegerValue(100));
+
+    // ── 변경: 핸드오버 파라미터 ──
     lteHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
-    lteHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(1.0));   // 3dB
-    lteHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(256)));
+    lteHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(0.0));
+    lteHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(0)));
 
     Ptr<Node> pgw = epcHelper->GetPgwNode();
     Ptr<Node> sgw = epcHelper->GetSgwNode();
@@ -369,7 +382,7 @@ main()
     internet.Install(remoteHostContainer);
 
     PointToPointHelper p2ph;
-    p2ph.SetDeviceAttribute("DataRate", DataRateValue(DataRate("100Gb/s")));
+    p2ph.SetDeviceAttribute("DataRate", DataRateValue(DataRate("100Mb/s")));
     p2ph.SetDeviceAttribute("Mtu", UintegerValue(1500));
     p2ph.SetChannelAttribute("Delay", TimeValue(Seconds(0.010)));
     NetDeviceContainer internetDevices = p2ph.Install(pgw, remoteHost);
@@ -399,64 +412,36 @@ main()
     ueNodes.Create(numberOfUes);
 
     // eNB 위치
+    // ── 변경: 논문 일직선 배치 ISD=500m ──
     Ptr<ListPositionAllocator> enbPositionAlloc = CreateObject<ListPositionAllocator>();
-    // === 변경 (hexagonal 정삼각형, ISD=500m) ===
-    double isd = 200.0;
-    // eNB1: 꼭짓점 위
-    // eNB2: 왼쪽 아래
-    // eNB3: 오른쪽 아래
-    double cx = 500.0;  // 삼각형 중심 x
-    double cy = 644.0;  // 삼각형 중심 y (= 500 + isd/√3 ≈ 500 + 288.7 * 0.5)
-    double height = isd * std::sqrt(3.0) / 2.0;  // 삼각형 높이 = 173m
-
-    enbPositionAlloc->Add(Vector(cx, cy + height / 3.0, 0));           // eNB1 (500, 788)
-    enbPositionAlloc->Add(Vector(cx - isd / 2.0, cy - height * 2.0 / 3.0, 0)); // eNB2 (250, 355)
-    enbPositionAlloc->Add(Vector(cx + isd / 2.0, cy - height * 2.0 / 3.0, 0)); // eNB3 (750, 355)
+    enbPositionAlloc->Add(Vector(500.0, 500.0, 0));    // eNB1
+    enbPositionAlloc->Add(Vector(1000.0, 500.0, 0));   // eNB2
+    enbPositionAlloc->Add(Vector(1500.0, 500.0, 0));   // eNB3
     MobilityHelper enbMobility;
     enbMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     enbMobility.SetPositionAllocator(enbPositionAlloc);
     enbMobility.Install(enbNodes);
 
-    // UE 위치: 전부 eNB2(1200,400) 근처에 격자 배치
-    Ptr<ListPositionAllocator> uePositionAlloc = CreateObject<ListPositionAllocator>();
-    // UE 배치: eNB2 (250, 355) 근처, 반경 30~150m
-    double ueCenterX = 400.0;   // eNB2 x
-    double ueCenterY = 528.0;   // eNB2 y
-    double minRadius = 30.0;
-    double maxRadius = 40.0;   // 150 → 80으로 축소
 
-    Ptr<UniformRandomVariable> randRadius = CreateObject<UniformRandomVariable>();
-    randRadius->SetAttribute("Min", DoubleValue(minRadius));
-    randRadius->SetAttribute("Max", DoubleValue(maxRadius));
 
-    Ptr<UniformRandomVariable> randAngle = CreateObject<UniformRandomVariable>();
-    randAngle->SetAttribute("Min", DoubleValue(0.0));
-    randAngle->SetAttribute("Max", DoubleValue(2.0 * M_PI));
-
-    for (uint16_t i = 0; i < numberOfUes; i++)
-    {
-        double r = randRadius->GetValue();
-        double theta = randAngle->GetValue();
-        double ueX = ueCenterX + r * std::cos(theta);
-        double ueY = ueCenterY + r * std::sin(theta);
-        uePositionAlloc->Add(Vector(ueX, ueY, 0));
-    }
+    // ── 변경: 논문 UE 배치 ──
     MobilityHelper ueMobility;
-    // 삼각형 전체를 커버하는 범위
-    // eNB1 (cx, cy+h/3), eNB2 (cx-isd/2, cy-2h/3), eNB3 (cx+isd/2, cy-2h/3)
-    // 여유를 줘서 eNB 배치 영역 + 100m 패딩
+    Ptr<RandomRectanglePositionAllocator> ueAllocator =
+        CreateObject<RandomRectanglePositionAllocator>();
+    Ptr<UniformRandomVariable> xPos = CreateObject<UniformRandomVariable>();
+    xPos->SetAttribute("Min", DoubleValue(400.0));
+    xPos->SetAttribute("Max", DoubleValue(1600.0));
+    ueAllocator->SetX(xPos);
+    Ptr<UniformRandomVariable> yPos = CreateObject<UniformRandomVariable>();
+    yPos->SetAttribute("Min", DoubleValue(400.0));
+    yPos->SetAttribute("Max", DoubleValue(600.0));
+    ueAllocator->SetY(yPos);
 
-    double minX = (cx - isd / 2.0) - 100.0;   // eNB2 x - 100
-    double maxX = (cx + isd / 2.0) + 100.0;   // eNB3 x + 100
-    double minY = (cy - height * 2.0 / 3.0) - 100.0;  // eNB2,3 y - 100
-    double maxY = (cy + height / 3.0) + 100.0;         // eNB1 y + 100
-
-    ueMobility.SetMobilityModel("ns3::RandomWalk2dMobilityModel",
-    "Bounds", RectangleValue(Rectangle(minX, maxX, minY, maxY)),
-    "Speed", StringValue("ns3::ConstantRandomVariable[Constant=25.0]"),  // 3 m/s (빠른 보행)
-    "Direction", StringValue("ns3::UniformRandomVariable[Min=0|Max=6.283185]"),
-    "Distance", DoubleValue(30.0));  // 30m마다 방향 전환
-    ueMobility.SetPositionAllocator(uePositionAlloc);
+    ueMobility.SetPositionAllocator(ueAllocator);
+    ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
+        "Bounds", RectangleValue(Rectangle(300, 1700, 300, 700)),
+        "Speed", StringValue("ns3::ConstantRandomVariable[Constant=3]"),
+        "Pause", StringValue("ns3::ConstantRandomVariable[Constant=0.1]"));
     ueMobility.Install(ueNodes);
 
     // Install LTE Devices
@@ -471,12 +456,10 @@ main()
 
     // ★ UE 12개 전부 eNB1에 강제 연결 (극단적 과부하)
     // 강제 연결 복구 (eNB2, 인덱스 1)
-    for (uint16_t i = 0; i < numberOfUes; i++) {
-        Ptr<NetDevice> ueDev = ueLteDevs.Get(i);
-        Ptr<NetDevice> enbDev = enbLteDevs.Get(1);  // eNB2
-        Simulator::Schedule(Seconds(3.0 + i * 0.1), [lteHelper, ueDev, enbDev]() {
-            lteHelper->Attach(ueDev, enbDev);
-        });
+// 모든 단말을 시작과 동시에 가장 가까운 기지국(eNB)에 자동으로 연결
+    for (uint16_t i = 0; i < numberOfUes; i++)
+    {
+        lteHelper->AttachToClosestEnb(ueLteDevs.Get(i), enbLteDevs);
     }
 
     NS_LOG_LOGIC("setting up applications");
@@ -579,40 +562,72 @@ main()
     E2AP e2n1;
 
     // SON xApp: 주기 1초, 자체 핸드오버 ON
-    xAppHandoverSON sonxapp(3.0, false);
+    xAppHandoverSON sonxapp(2.0, false);
 
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
 
     enbNodes.Get(0)->AddApplication(&e2n1);
 
-    Simulator::Schedule(Seconds(1.0), &E2AP::Connect, &e2t);
-    Simulator::Schedule(Seconds(1.5), &E2AP::Connect, &e2n1);
-    Simulator::Schedule(Seconds(2.0), &E2AP::SendE2SetupRequest, &e2n1);
+    Simulator::Schedule(Seconds(0.1), &E2AP::Connect, &e2t);
+    Simulator::Schedule(Seconds(0.2), &E2AP::Connect, &e2n1);
+    Simulator::Schedule(Seconds(0.3), &E2AP::SendE2SetupRequest, &e2n1);
     //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n1);
     //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n1);
 
     E2AP e2n2;
     enbNodes.Get(1)->AddApplication(&e2n2);
-    Simulator::Schedule(Seconds(1.5), &E2AP::Connect, &e2n2);
-    Simulator::Schedule(Seconds(2.0), &E2AP::SendE2SetupRequest, &e2n2);
+    Simulator::Schedule(Seconds(0.2), &E2AP::Connect, &e2n2);
+    Simulator::Schedule(Seconds(0.3), &E2AP::SendE2SetupRequest, &e2n2);
     //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n2);
     //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n2);
 
     E2AP e2n3;
     enbNodes.Get(2)->AddApplication(&e2n3);
-    Simulator::Schedule(Seconds(1.0), &E2AP::Connect, &e2n3);
-    Simulator::Schedule(Seconds(2.0), &E2AP::SendE2SetupRequest, &e2n3);
+    Simulator::Schedule(Seconds(0.2), &E2AP::Connect, &e2n3);
+    Simulator::Schedule(Seconds(0.3), &E2AP::SendE2SetupRequest, &e2n3);
     //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n3);
     //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n3);
 
     // 수동 핸드오버 없음 — SON 자체 부하분산만
+    // UE 위치 트래커
+    std::ofstream ueTrajCsv("ue_trajectory.csv");
+    ueTrajCsv << "time_s,ueIndex,x,y,servingCellId" << std::endl;
+    ueTrajCsv.close();
+
+    // 0.5초마다 모든 UE 위치 기록
+    for (double t = 0.0; t < 600.0; t += 0.5)
+    {
+        Simulator::Schedule(Seconds(t), [&ueNodes, &ueLteDevs, numberOfUes]() {
+            std::ofstream csv("ue_trajectory.csv", std::ios::app);
+            double now = Simulator::Now().GetSeconds();
+
+            for (uint16_t i = 0; i < numberOfUes; i++)
+            {
+                Ptr<MobilityModel> mob = ueNodes.Get(i)->GetObject<MobilityModel>();
+                Vector pos = mob->GetPosition();
+
+                // serving cell 조회
+                Ptr<LteUeNetDevice> ueDev =
+                    DynamicCast<LteUeNetDevice>(ueLteDevs.Get(i));
+                uint16_t cellId = 0;
+                if (ueDev && ueDev->GetRrc())
+                    cellId = ueDev->GetRrc()->GetCellId();
+
+                csv << now << "," << i << ","
+                    << pos.x << "," << pos.y << ","
+                    << cellId << std::endl;
+            }
+            csv.close();
+        });
+    }
 
     // TestSONXappLB.cc에서 Simulator::Stop 직전에
-    Simulator::Schedule(Seconds(599.0), [&sonxapp]() {
+    Simulator::Schedule(Seconds(59.0), [&sonxapp]() {
         sonxapp.SaveModels();
     });
-    Simulator::Stop(Seconds(600.0));
+    
+    Simulator::Stop(Seconds(60.0));
     Simulator::Run();
     std::ofstream csvOutput(output_csv_filename);
     csvOutput << "Time (ns),IMSI,SrcCellId,RNTI,TrgtCellId,Type," << std::endl;
