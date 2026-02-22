@@ -17,6 +17,7 @@
 
 #include <map>
 #include <string>
+#include <ctime>
 
 NS_LOG_COMPONENT_DEFINE("TestHandoverSONXapp");
 
@@ -327,6 +328,8 @@ UeStateTransition(std::string context, uint64_t imsi, uint16_t cellId,
 int
 main()
 {
+    RngSeedManager::SetSeed(1);
+    RngSeedManager::SetRun(static_cast<uint64_t>(std::time(nullptr)));
     GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
 
     // ── 변경 ──
