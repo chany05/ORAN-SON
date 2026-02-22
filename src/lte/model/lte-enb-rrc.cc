@@ -1501,47 +1501,7 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
                     }
                 }
             }
-            // Throughput KPM
-            {
-                uint64_t totalTxBytes = 0;
-                uint64_t totalRxBytes = 0;
-
-                for (auto& [drbId, drbInfo] : m_drbMap)
-                {
-                    if (drbInfo && drbInfo->m_pdcp)
-                    {
-                        totalTxBytes += drbInfo->m_pdcp->GetTxBytes();
-                        totalRxBytes += drbInfo->m_pdcp->GetRxBytes();
-                        drbInfo->m_pdcp->ResetByteCounters();
-                    }
-                }
-                Time now = Simulator::Now();
-                double intervalSec = (m_lastThroughputTimestamp.IsZero())
-                    ? 0.5  // 첫 측정 시 기본값
-                    : (now - m_lastThroughputTimestamp).GetSeconds();
-                m_lastThroughputTimestamp = now;
-
-                if (intervalSec > 0 && (totalTxBytes > 0 || totalRxBytes > 0))
-                {
-                    double dlKbps = (totalTxBytes * 8.0) / 1000.0 / intervalSec;
-                    double ulKbps = (totalRxBytes * 8.0) / 1000.0 / intervalSec;
-
-                    Json tputJson;
-                    tputJson["RNTI"] = m_rnti;
-                    tputJson["CELLID"] = m_rrc->ComponentCarrierToCellId(m_componentCarrierId);
-
-                    tputJson["VALUE"] = (int)dlKbps;
-                    e2ap->PublishToEndpointSubscribers("/KPM/DRB.IpThpDl.QCI", tputJson);
-
-                    tputJson["VALUE"] = (int)ulKbps;
-                    e2ap->PublishToEndpointSubscribers("/KPM/DRB.IpThpUl.QCI", tputJson);
-/*
-                    NS_LOG_UNCOND("[KPM] Throughput - RNTI=" << m_rnti
-                        << " | CELLID=" << m_rrc->ComponentCarrierToCellId(m_componentCarrierId)
-                        << " | DL=" << (int)dlKbps << "kbps"
-                        << " | UL=" << (int)ulKbps << "kbps");*/
-                }
-            }
+            
         }
     }
 
@@ -1701,11 +1661,48 @@ LteEnbRrc::PublishCellKpm()
                            << " | TxPower=" << txPower << "dBm");*/
             }
 
-            
+            uint64_t cellDlBytes = 0;
+            uint64_t cellUlBytes = 0;
+
+            for (auto& [rnti, ueManager] : m_ueMap)
+            {
+                auto state = ueManager->GetState();
+                if (state != UeManager::CONNECTED_NORMALLY &&
+                    state != UeManager::CONNECTION_RECONFIGURATION)
+                    continue;
+
+                for (auto& [drbId, drbInfo] : ueManager->GetDrbMap())
+                {
+                    if (drbInfo && drbInfo->m_pdcp)
+                    {
+                        cellDlBytes += drbInfo->m_pdcp->GetTxBytes();
+                        cellUlBytes += drbInfo->m_pdcp->GetRxBytes();
+                    }
+                }
+            }
+
+            Json volJson;
+            volJson["CELLID"] = cellId;
+
+            volJson["VALUE"] = (int64_t)cellDlBytes;
+            e2ap->PublishToEndpointSubscribers("/KPM/DRB.IpVolDl.QCI", volJson);
+
+            volJson["VALUE"] = (int64_t)cellUlBytes;
+            e2ap->PublishToEndpointSubscribers("/KPM/DRB.IpVolUl.QCI", volJson);
+            /*
+            std::cout << "[CellKPM] Cell" << cellId
+                << " DL_bytes=" << cellDlBytes
+                << " UL_bytes=" << cellUlBytes
+                << " UEs=" << m_ueMap.size()
+                << " @" << Simulator::Now().GetSeconds() << "s" << std::endl;
+            */
+
         }
     }
-    
-    Simulator::Schedule(Seconds(1.0), &LteEnbRrc::PublishCellKpm, this);
+
+
+
+    Simulator::Schedule(Seconds(0.1), &LteEnbRrc::PublishCellKpm, this);
 }
 
 void

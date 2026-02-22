@@ -330,9 +330,9 @@ main()
     GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
 
     // ── 변경 ──
-    uint16_t numberOfUes = 90;
+    uint16_t numberOfUes = 40;
     uint16_t numberOfEnbs = 3;
-    uint16_t numBearersPerUe = 5;
+    uint16_t numBearersPerUe = 2;
     double enbTxPowerDbm = 32.0;
     std::string output_csv_filename = "outputSONLB.csv";
 
@@ -345,7 +345,7 @@ main()
 
     // ── 변경: 논문 트래픽 ──
     Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(1)));
-    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(12));
+    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(512));
     Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(1000000));
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
@@ -358,7 +358,7 @@ main()
 
     // ── 변경: 스케줄러, 경로손실, 대역폭 ──
     lteHelper->SetSchedulerType("ns3::PfFfMacScheduler");
-    lteHelper->SetAttribute("PathlossModel", StringValue("ns3::Cost231PropagationLossModel"));
+    lteHelper->SetAttribute("PathlossModel", StringValue("ns3::FriisPropagationLossModel"));
     lteHelper->SetSpectrumChannelType("ns3::MultiModelSpectrumChannel");
     lteHelper->SetEnbAntennaModelType("ns3::IsotropicAntennaModel");
     lteHelper->SetEnbDeviceAttribute("DlEarfcn", UintegerValue(100));
@@ -562,7 +562,7 @@ main()
     E2AP e2n1;
 
     // SON xApp: 주기 1초, 자체 핸드오버 ON
-    xAppHandoverSON sonxapp(2.0, false);
+    xAppHandoverSON sonxapp(0.5, false);
 
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
@@ -588,7 +588,7 @@ main()
     Simulator::Schedule(Seconds(0.3), &E2AP::SendE2SetupRequest, &e2n3);
     //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n3);
     //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n3);
-
+    /*
     // 수동 핸드오버 없음 — SON 자체 부하분산만
     // UE 위치 트래커
     std::ofstream ueTrajCsv("ue_trajectory.csv");
@@ -621,7 +621,7 @@ main()
             csv.close();
         });
     }
-
+    */
     // TestSONXappLB.cc에서 Simulator::Stop 직전에
     Simulator::Schedule(Seconds(59.0), [&sonxapp]() {
         sonxapp.SaveModels();
@@ -630,12 +630,14 @@ main()
     Simulator::Stop(Seconds(60.0));
     Simulator::Run();
     std::ofstream csvOutput(output_csv_filename);
+    /*
     csvOutput << "Time (ns),IMSI,SrcCellId,RNTI,TrgtCellId,Type," << std::endl;
     for (auto& entry : simulationRegistry)
     {
         csvOutput << entry << std::endl;
     }
     csvOutput.close();
+    */
     Simulator::Destroy();
     return 0;
 }

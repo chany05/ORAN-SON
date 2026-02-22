@@ -295,10 +295,10 @@ const std::map<std::string, std::tuple<enum MeasurementType, std::string, enum F
                                          // 4.4.5 IP Latency Measurements
         {"DRB.IpLateDl.QCI", {INTEGER, "ms", NOTIMPLEMENTED}},
         // 4.4.6 IP Throughput Measurements
-        {"DRB.IpThpDl.QCI", {INTEGER, "kbps", IMPLEMENTED}},
-        {"DRB.IpThpUl.QCI", {INTEGER, "kbps", IMPLEMENTED}},
-        {"DRB.IpVolDl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
-        {"DRB.IpVolUl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
+        {"DRB.IpThpDl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
+        {"DRB.IpThpUl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
+        {"DRB.IpVolDl.QCI", {INTEGER, "kbps", IMPLEMENTED}},
+        {"DRB.IpVolUl.QCI", {INTEGER, "kbps", IMPLEMENTED}},
         {"DRB.IpTimeDl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
         {"DRB.IpTimeUl.QCI", {INTEGER, "kbps", NOTIMPLEMENTED}},
         // 4.4.7 PDCP Data Volume Measurements

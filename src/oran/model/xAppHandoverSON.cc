@@ -21,7 +21,7 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
       m_initiateHandovers(initiateHandovers),
       //m_cellRadius(289.0),
       //m_edgeThreshold(0.7),
-      m_edgeRsrpThreshold(-118.0), // ★ 237.74m 물리적 거리에 상응하는 RSRP 임계값
+      m_edgeRsrpThreshold(-85.28), // ★ 237.74m 물리적 거리에 상응하는 RSRP 임계값
       m_loadThreshold(12.0),
       m_rsrqThreshold(-15.0),
       m_cqiThreshold(11),
@@ -31,7 +31,7 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
 {
 
     NS_LOG_FUNCTION(this);
-
+    
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverEndOk",
                     MakeCallback(&xAppHandoverSON::HandoverSucceeded, this));
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverStart",
@@ -40,6 +40,7 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
                     MakeCallback(&xAppHandoverSON::HandoverFailed, this));
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/ConnectionEstablished",
                     MakeCallback(&xAppHandoverSON::ConnectionEstablished, this));
+                    
     // ── MADDPG 초기화 ──
     if (m_useMADDPG)
     {
@@ -59,27 +60,35 @@ xAppHandoverSON::PeriodicSONCheck()
 
     // 1. KPM 수집 (기존 로직 그대로)
     CollectKPMs();
-
-    LogCellMetrics();  // ★ 추가
-
+    if (m_stepCount % 10 == 0)
+    {
+        LogCellMetrics();  // ★ 추가
+    }
     NS_LOG_LOGIC("cell 1: " << m_cellContexts[1].ueCount
         << " cell 2: " << m_cellContexts[2].ueCount
         << " cell 3: " << m_cellContexts[3].ueCount);
     NS_LOG_LOGIC("[SON] === Periodic Check === UEs=" << m_ueContexts.size()
         << " Cells=" << m_cellContexts.size());
+
+    std::cout << "\n[TICK] PeriodicSONCheck 불림 - Step: " << m_stepCount 
+              << " | UE 수: " << m_ueContexts.size() << std::endl;
     for (auto& [key, ue] : m_ueContexts)
     {
+        // 변경 후
         NS_LOG_UNCOND("[SON]   UE RNTI=" << ue.rnti
             << " Cell=" << ue.servingCellId
             << " RSRP=" << ue.servingRsrp
             << " RSRQ=" << ue.servingRsrq
             << " CQI=" << ue.cqi
-            << " DL=" << ue.throughputDl << "kbps"
-            << " UL=" << ue.throughputUl << "kbps"
-            << " TxPower=" << m_cellContexts[ue.servingCellId].txPower << "dBm");
+            << " isEdge=" << ue.isEdge);
+
+        std::cout << "[SON]   UE RNTI=" << ue.rnti
+            << " Cell=" << ue.servingCellId
+            << " RSRP=" << ue.servingRsrp
+            << " RSRQ=" << ue.servingRsrq
+            << " CQI=" << ue.cqi
+            << " isEdge=" << ue.isEdge << std::endl;
     }
-    // 2. Edge UE 계산 (기존 로직 그대로)
-    CalculateEdgeUEs();
 
     if (m_useMADDPG)
     {
@@ -90,6 +99,7 @@ xAppHandoverSON::PeriodicSONCheck()
         // 4. 배치 학습
         if (!m_inferenceOnly)
         {
+            //if (m_stepCount % 4 == 0)
             TrainMADDPG();
         }
 
@@ -131,6 +141,7 @@ xAppHandoverSON::PeriodicSONCheck()
                 }
             }
         }
+        CollectCellThroughput();
     }
 
     Simulator::Schedule(Seconds(m_sonPeriodicitySec),
@@ -151,7 +162,9 @@ xAppHandoverSON::CollectKPMs()
     CollectRsrpRsrq();
     CollectTargetRsrq();
     CollectCqi();
-    CollectThroughput();
+    //CollectThroughput();
+
+    CalculateEdgeUEs();
     CollectUeCount();
     CollectCellThroughput();  // ★ 추가: 셀 단위 DL+UL throughput 집계
 
@@ -272,56 +285,7 @@ xAppHandoverSON::CollectCqi()
         }
     }
 }
-void
-xAppHandoverSON::CollectThroughput()
-{
-    NS_LOG_FUNCTION(this);
-    E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
 
-    // DL
-    auto dlMap = ric->QueryKpmMetric("/KPM/DRB.IpThpDl.QCI");
-    for (auto& e2nodeMeasurements : dlMap)
-    {
-        for (auto& measurement : e2nodeMeasurements.second)
-        {
-            if (!measurement.measurements.contains("RNTI") ||
-                !measurement.measurements.contains("CELLID"))
-                continue;
-
-            uint16_t rnti = measurement.measurements["RNTI"];
-            uint16_t cellId = measurement.measurements["CELLID"];
-
-            UeKey key = MakeUeKey(cellId, rnti);
-            if (m_ueContexts.find(key) != m_ueContexts.end() &&
-                m_ueContexts[key].throughputDl == 0)
-            {
-                m_ueContexts[key].throughputDl = measurement.measurements["VALUE"];
-            }
-        }
-    }
-
-    // UL
-    auto ulMap = ric->QueryKpmMetric("/KPM/DRB.IpThpUl.QCI");
-    for (auto& e2nodeMeasurements : ulMap)
-    {
-        for (auto& measurement : e2nodeMeasurements.second)
-        {
-            if (!measurement.measurements.contains("RNTI") ||
-                !measurement.measurements.contains("CELLID"))
-                continue;
-
-            uint16_t rnti = measurement.measurements["RNTI"];
-            uint16_t cellId = measurement.measurements["CELLID"];
-
-            UeKey key = MakeUeKey(cellId, rnti);
-            if (m_ueContexts.find(key) != m_ueContexts.end() &&
-                m_ueContexts[key].throughputUl == 0)
-            {
-                m_ueContexts[key].throughputUl = measurement.measurements["VALUE"];
-            }
-        }
-    }
-}
 
 void
 xAppHandoverSON::CollectCellKpms()
@@ -409,6 +373,8 @@ void
 xAppHandoverSON::CollectCellThroughput()
 {
     NS_LOG_FUNCTION(this);
+    E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
+    if (!ric) return;
 
     for (auto& [cellId, cell] : m_cellContexts)
     {
@@ -416,23 +382,119 @@ xAppHandoverSON::CollectCellThroughput()
         cell.totalThroughputUl = 0.0;
     }
 
-    for (auto& [key, ue] : m_ueContexts)
+    // ── DL ──
+    auto dlMap = ric->QueryKpmMetric("/KPM/DRB.IpVolDl.QCI");
+    std::map<uint16_t, double> latestDlBytes;
+    for (auto& [endpoint, measurements] : dlMap)
     {
-        uint16_t cellId = ue.servingCellId;
-        auto it = m_cellContexts.find(cellId);
-        if (it != m_cellContexts.end())
+        for (auto& m : measurements)
         {
-            it->second.totalThroughputDl += ue.throughputDl;
-            it->second.totalThroughputUl += ue.throughputUl;
+            if (!m.measurements.contains("CELLID") ||
+                !m.measurements.contains("VALUE"))
+                continue;
+            uint16_t cellId = m.measurements["CELLID"];
+            double cumBytes = m.measurements["VALUE"];
+            latestDlBytes[cellId] = std::max(latestDlBytes[cellId], cumBytes);
         }
     }
+    for (auto& [cellId, cumBytes] : latestDlBytes)
+    {
+        double prev = m_prevCellDlBytes.count(cellId) ? m_prevCellDlBytes[cellId] : -1.0;
+        m_prevCellDlBytes[cellId] = cumBytes;
 
+        if (prev < 0) continue;  // 첫 읽기 — baseline 설정만
+
+        double delta = cumBytes - prev;
+        if (delta < 0) delta = 0;
+
+        auto it = m_cellContexts.find(cellId);
+        if (it != m_cellContexts.end())
+            it->second.totalThroughputDl += delta;
+    }
+
+    // ── UL ──
+    auto ulMap = ric->QueryKpmMetric("/KPM/DRB.IpVolUl.QCI");
+    std::map<uint16_t, double> latestUlBytes;
+    for (auto& [endpoint, measurements] : ulMap)
+    {
+        for (auto& m : measurements)
+        {
+            if (!m.measurements.contains("CELLID") ||
+                !m.measurements.contains("VALUE"))
+                continue;
+            uint16_t cellId = m.measurements["CELLID"];
+            double cumBytes = m.measurements["VALUE"];
+            latestUlBytes[cellId] = std::max(latestUlBytes[cellId], cumBytes);
+        }
+    }
+    for (auto& [cellId, cumBytes] : latestUlBytes)
+    {
+        double prev = m_prevCellUlBytes.count(cellId) ? m_prevCellUlBytes[cellId] : 0.0;
+        m_prevCellUlBytes[cellId] = cumBytes;
+
+        if (prev < 0) continue;
+
+        double delta = cumBytes - prev;
+        if (delta < 0) delta = 0;
+
+        auto it = m_cellContexts.find(cellId);
+        if (it != m_cellContexts.end())
+            it->second.totalThroughputUl += delta;
+    }
+
+    // bytes → kbps (SON 주기 기반)
     for (auto& [cellId, cell] : m_cellContexts)
     {
-        NS_LOG_LOGIC("[KPM] Cell" << cellId
-            << " DL=" << (cell.totalThroughputDl / 1e3) << "Mbps"
-            << " UL=" << (cell.totalThroughputUl / 1e3) << "Mbps"
-            << " UEs=" << cell.ueCount);
+        double dlDelta = cell.totalThroughputDl;  // 아직 bytes 상태
+        double ulDelta = cell.totalThroughputUl;
+        if (dlDelta > 0 || ulDelta > 0)
+        {
+            cell.totalThroughputDl = (cell.totalThroughputDl * 8.0) / 1000.0 / m_sonPeriodicitySec;
+            cell.totalThroughputUl = (cell.totalThroughputUl * 8.0) / 1000.0 / m_sonPeriodicitySec;
+
+            std::cout << "[IpVol] Cell" << cellId
+                << " DL=" << (cell.totalThroughputDl / 1e3) << "Mbps"
+                << " UL=" << (cell.totalThroughputUl / 1e3) << "Mbps"
+                << " UEs=" << cell.ueCount << std::endl;
+            NS_LOG_LOGIC("[KPM-Vol] Cell" << cellId
+                << " DL=" << (cell.totalThroughputDl / 1e3) << "Mbps"
+                << " UL=" << (cell.totalThroughputUl / 1e3) << "Mbps");
+
+            // 캐시 저장
+            m_lastThroughputDl[cellId] = cell.totalThroughputDl;
+            m_lastThroughputUl[cellId] = cell.totalThroughputUl;
+
+            double dlBytes = cell.totalThroughputDl * m_sonPeriodicitySec * 1000.0 / 8.0;
+            double ulBytes = cell.totalThroughputUl * m_sonPeriodicitySec * 1000.0 / 8.0;
+
+            std::cout << "[IpVol] Cell" << cellId
+                << " DL=" << (cell.totalThroughputDl / 1e3) << "Mbps"
+                << " (" << (dlBytes / 1e3) << "KB)"
+                << " UL=" << (cell.totalThroughputUl / 1e3) << "Mbps"
+                << " UEs=" << cell.ueCount
+                << " edge=" << cell.edgeUeCount << std::endl;
+        }
+        else
+        {
+            // delta=0이면 이전 값 유지
+            cell.totalThroughputDl = m_lastThroughputDl[cellId];
+            cell.totalThroughputUl = m_lastThroughputUl[cellId];
+
+            std::cout << "[IpVol] Cell" << cellId
+                << " DL=" << (cell.totalThroughputDl / 1e3) << "Mbps"
+                << " UL=" << (cell.totalThroughputUl / 1e3) << "Mbps"
+                << " UEs=" << cell.ueCount << std::endl;
+        }
+        
+
+        double offeredMbps = cell.ueCount * 8.192;
+        double actualMbps = cell.totalThroughputDl / 1e3;
+        std::cout << "[SAT] Cell" << cellId
+            << " UEs=" << cell.ueCount
+            << " offered=" << offeredMbps << "Mbps"
+            << " actual=" << actualMbps << "Mbps"
+            << " ratio=" << (offeredMbps > 0 ? actualMbps / offeredMbps : 0)
+            << std::endl;
     }
 }
 // =============================================================================
@@ -975,7 +1037,10 @@ xAppHandoverSON::ComputeRewards()
         auto it = m_cellContexts.find(cellId);
         if (it != m_cellContexts.end())
         {
-            rewards.push_back(it->second.totalThroughputDl / 1e6);  // Mbps
+            // DL + UL 합산 (Mbps)
+            double totalThp = (it->second.totalThroughputDl
+                             + it->second.totalThroughputUl) / 1e3;
+            rewards.push_back(totalThp);
         }
         else
         {
@@ -1031,6 +1096,13 @@ xAppHandoverSON::StepMADDPG()
                 << rewards[1] << ", " << rewards[2] << "]"
                 << " BufferSize=" << m_replayBuffer->Size()
                 << " Epsilon=" << m_epsilon);
+
+                       
+            // NS_LOG_UNCOND 대신 std::cout 사용!
+            std::cout << "🚀 [MADDPG] Step=" << m_stepCount
+                    << " | Reward=" << rewards[0] << ", " << rewards[1] << ", " << rewards[2]
+                    << " | BufferSize=" << m_replayBuffer->Size() << std::endl;
+            
         }
     }
 
@@ -1124,29 +1196,31 @@ xAppHandoverSON::StepMADDPG()
         NS_LOG_UNCOND("[MADDPG] Cell" << srcCell
             << " CIO=" << cioDB << "dB(IE=" << cioIE << ")"
             << " TXP=" << txpApplied << "dBm(offset=" << paperTxpOffset<< ")");
-
-        // ★ CSV 로깅
-        double now = Simulator::Now().GetSeconds();
-
-        // CIO 로그 — 각 이웃별로 기록
-        for (auto nId : neighbors)
+        if (m_stepCount % 10 == 0)
         {
-            m_cioActionsCsv << now << ","
-                << srcCell << "," << nId << ","
-                << cioDB << "," << cioIE << std::endl;
+            // ★ CSV 로깅
+            double now = Simulator::Now().GetSeconds();
+
+            // CIO 로그 — 각 이웃별로 기록
+            for (auto nId : neighbors)
+            {
+                m_cioActionsCsv << now << ","
+                    << srcCell << "," << nId << ","
+                    << cioDB << "," << cioIE << std::endl;
+            }
+
+            // MADDPG 행동 로그
+            double cellThp = 0.0;
+            auto cellIt = m_cellContexts.find(srcCell);
+            if (cellIt != m_cellContexts.end())
+                cellThp = cellIt->second.totalThroughputDl + cellIt->second.totalThroughputUl;
+
+            m_maddpgActionsCsv << now << ","
+                << srcCell << ","
+                << actData[0] << "," << actData[1] << ","
+                << cioDB << "," << txpApplied << ","
+                << cellThp << "," << m_epsilon << std::endl;
         }
-
-        // MADDPG 행동 로그
-        double reward = 0.0;
-        auto cellIt = m_cellContexts.find(srcCell);
-        if (cellIt != m_cellContexts.end())
-            reward = cellIt->second.totalThroughputDl;
-
-        m_maddpgActionsCsv << now << ","
-            << srcCell << ","
-            << actData[0] << "," << actData[1] << ","
-            << cioDB << "," << txpApplied << ","
-            << reward << "," << m_epsilon << std::endl;
     }
 
     // ── epsilon 감소 ──
@@ -1188,7 +1262,7 @@ xAppHandoverSON::TrainMADDPG()
 
     if (m_replayBuffer->Size() < BATCH_SIZE)
     {
-        NS_LOG_LOGIC("[MADDPG] Warmup: " << m_replayBuffer->Size()
+        NS_LOG_UNCOND("[MADDPG] Warmup: " << m_replayBuffer->Size()
             << "/" << BATCH_SIZE);
         return;
     }
@@ -1280,6 +1354,10 @@ xAppHandoverSON::TrainMADDPG()
             NS_LOG_UNCOND("[MADDPG] Train Agent=" << i
                 << " CriticLoss=" << criticLoss.item<float>()
                 << " ActorLoss=" << actorLoss.item<float>());
+            std::cout << "🔥 [MADDPG Train] Step=" << m_stepCount
+                      << " | Agent=" << i
+                      << " | CriticLoss=" << criticLoss.item<float>()
+                      << " | ActorLoss=" << actorLoss.item<float>() << std::endl;
         }
     }
 }
@@ -1326,7 +1404,12 @@ xAppHandoverSON::SaveModels(const std::string& dir)
 
     NS_LOG_UNCOND("[MADDPG] Models & Buffer saved to " << dir
         << "/ (step=" << m_stepCount << ", BufferSize=" << m_replayBuffer->Size() << ")");
-
+    
+    // 모델 저장 후
+    std::ofstream metaFile(dir + "/meta.txt");
+    metaFile << m_epsilon << std::endl;
+    metaFile << m_stepCount << std::endl;
+    metaFile.close();
 
 }
 
@@ -1334,6 +1417,7 @@ void
 xAppHandoverSON::LoadModels(const std::string& dir)
 {
     NS_LOG_FUNCTION(this);
+    std::cout << "loaded" << std::endl;
 
     for (size_t i = 0; i < m_agents.size(); i++)
     {
@@ -1365,19 +1449,45 @@ xAppHandoverSON::LoadModels(const std::string& dir)
     }
 
     NS_LOG_UNCOND("[MADDPG] Models & Buffer loaded from " << dir << "/");
+    std::ifstream metaFile(dir + "/meta.txt");
+    if (metaFile.is_open())
+    {
+        metaFile >> m_epsilon;
+        metaFile >> m_stepCount;
+        metaFile >> m_episode;
+        metaFile.close();
+        m_episode++;  // 새 실행 = 새 에피소드
+        NS_LOG_UNCOND("[MADDPG] Restored epsilon=" << m_epsilon
+            << " stepCount=" << m_stepCount
+            << " episode=" << m_episode);
+    }
 }
 
 void
 xAppHandoverSON::InitCsvLoggers()
 {
-    m_cellMetricsCsv.open("cell_metrics.csv");
-    m_cellMetricsCsv << "time_s,cellId,ueCount,edgeUeCount,totalDlThp_kbps,totalUlThp_kbps,avgCqi,txPower_dBm" << std::endl;
+    if (m_loadPretrained)
+    {
+        // 이어쓰기
+        m_cellMetricsCsv.open("cell_metrics.csv", std::ios::app);
+        m_cioActionsCsv.open("cio_actions.csv", std::ios::app);
+        m_maddpgActionsCsv.open("maddpg_actions.csv", std::ios::app);
+    }
+    else
+    {
+        // 새로 작성
+        m_cellMetricsCsv.open("cell_metrics.csv");
+        m_cellMetricsCsv << "episode,time_s,cellId,ueCount,edgeUeCount,"
+            << "cellDlThp_kbps,cellUlThp_kbps,"
+            << "avgCqi,txPower_dBm" << std::endl;
 
-    m_cioActionsCsv.open("cio_actions.csv");
-    m_cioActionsCsv << "time_s,srcCellId,neighborCellId,cioDB,cioIE" << std::endl;
+        m_cioActionsCsv.open("cio_actions.csv");
+        m_cioActionsCsv << "episode,time_s,srcCellId,neighborCellId,cioDB,cioIE" << std::endl;
 
-    m_maddpgActionsCsv.open("maddpg_actions.csv");
-    m_maddpgActionsCsv << "time_s,cellId,cioRawAction,txpRawAction,cioDB,txpApplied_dBm,reward,epsilon" << std::endl;
+        m_maddpgActionsCsv.open("maddpg_actions.csv");
+        m_maddpgActionsCsv << "episode,time_s,cellId,cioRawAction,txpRawAction,"
+            << "cioDB,txpApplied_dBm,cellThp_kbps,epsilon" << std::endl;
+    }
 }
 
 void
@@ -1387,7 +1497,6 @@ xAppHandoverSON::LogCellMetrics()
 
     for (auto& [cellId, cell] : m_cellContexts)
     {
-        // 평균 CQI 계산
         float avgCqi = 0.0f;
         uint32_t cqiCount = 0;
         for (auto& [key, ue] : m_ueContexts)
@@ -1400,7 +1509,8 @@ xAppHandoverSON::LogCellMetrics()
         }
         if (cqiCount > 0) avgCqi /= cqiCount;
 
-        m_cellMetricsCsv << now << ","
+        m_cellMetricsCsv << m_episode << ","
+            << now << ","
             << cellId << ","
             << cell.ueCount << ","
             << cell.edgeUeCount << ","

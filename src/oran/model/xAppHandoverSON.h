@@ -17,16 +17,13 @@ namespace ns3
 namespace oran
 {
 
-struct UEContext
-{
-    uint16_t rnti;
-    uint16_t servingCellId;
-    double servingRsrp;
-    double servingRsrq;
-    int cqi;
-    double throughputDl;
-    double throughputUl;
-    bool isEdge;
+struct UEContext {
+    uint16_t rnti = 0;
+    uint16_t servingCellId = 0;
+    double servingRsrp = 0;
+    double servingRsrq = 0;
+    int cqi = 0;
+    bool isEdge = false;
     std::map<uint16_t, double> neighborRsrq;
 };
 
@@ -160,7 +157,7 @@ class ReplayBuffer
             m_buffer.push_back(exp);
         }
     }
-    
+
   private:
     size_t m_capacity;
     std::deque<Experience> m_buffer;
@@ -292,7 +289,7 @@ class xAppHandoverSON : public xAppHandover
     void CollectKPMs();
     void CollectRsrpRsrq();
     void CollectCqi();
-    void CollectThroughput();
+    //void CollectThroughput();
     void CollectUeCount();
     void CollectCellKpms();
     void CollectCellThroughput();   // ★ 셀 throughput 수집 (DL+UL)
@@ -334,19 +331,25 @@ class xAppHandoverSON : public xAppHandover
     double m_txPower;
     double m_frequency;
     double m_edgeRsrpThreshold;
+    std::map<uint16_t, double> m_lastThroughputDl;
+    std::map<uint16_t, double> m_lastThroughputUl;
     uint16_t m_dlBandwidthPrb;
+    // 헤더에 추가
+    std::map<uint16_t, double> m_prevCellDlBytes;
+    std::map<uint16_t, double> m_prevCellUlBytes;
 
     // ── MADDPG (FineBalancer 논문 사양) ──────────────
     bool m_useMADDPG = true;
     bool m_loadPretrained = false;
     bool m_inferenceOnly = false;
+    int m_episode = 0;
 
     static constexpr int    NUM_AGENTS   = 3;
     static constexpr int    OBS_DIM      = 4;       // [AvgCqi, Thp, FarUes, ServedUes]
     static constexpr int    ACT_DIM      = 2;       // [CIO, TXP]
     static constexpr double MAX_ACTION   = 6.4999;
-    static constexpr size_t BUFFER_SIZE  = 100000;
-    static constexpr size_t BATCH_SIZE   = 256;
+    static constexpr size_t BUFFER_SIZE  = 10000;
+    static constexpr size_t BATCH_SIZE   = 128;
     static constexpr double GAMMA        = 0.99;
     static constexpr double TAU_SOFT     = 0.005;
     static constexpr double LR           = 3e-4;
@@ -354,7 +357,7 @@ class xAppHandoverSON : public xAppHandover
     // 탐색
     double m_epsilon = 1.0;
     static constexpr double EPSILON_END   = 1e-15;
-    static constexpr double EPSILON_DECAY = 0.9999;
+    static constexpr double EPSILON_DECAY = 0.999;
     static constexpr double EXPL_NOISE    = 0.1;
 
     // 에이전트 + 버퍼
