@@ -150,9 +150,10 @@ NotifyHandoverStartUe(std::string context,
                       uint16_t rnti,
                       uint16_t targetCellId)
 {
+    /*
     std::cout << context << " UE IMSI " << imsi << ": previously connected to CellId " << cellid
               << " with RNTI " << rnti << ", doing handover to CellId " << targetCellId
-              << std::endl;
+              << std::endl;*/
     simulationRegistry.emplace_back(imsi, cellid, rnti, targetCellId, Registry::HANDOVER_START_UE);
 }
 
@@ -166,8 +167,9 @@ NotifyHandoverStartUe(std::string context,
 void
 NotifyHandoverEndOkUe(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
 {
+    /*
     std::cout << context << " UE IMSI " << imsi << ": successful handover to CellId " << cellid
-              << " with RNTI " << rnti << std::endl;
+              << " with RNTI " << rnti << std::endl;*/
     simulationRegistry.emplace_back(imsi, cellid, rnti, cellid, Registry::HANDOVER_OK_UE);
 }
 
@@ -227,8 +229,9 @@ NotifyHandoverStartEnb(std::string context,
                        uint16_t rnti,
                        uint16_t targetCellId)
 {
+    /*
     std::cout << context << " eNB CellId " << cellid << ": start handover of UE with IMSI " << imsi
-              << " RNTI " << rnti << " to CellId " << targetCellId << std::endl;
+              << " RNTI " << rnti << " to CellId " << targetCellId << std::endl;*/
     simulationRegistry.emplace_back(imsi, cellid, rnti, targetCellId, Registry::HANDOVER_START_ENB);
 }
 
@@ -247,8 +250,9 @@ NotifyHandoverCancelledEnb(std::string context,
                            uint16_t rnti,
                            uint16_t targetCellId)
 {
+    /*
     std::cout << context << " eNB CellId " << cellid << ": RIC cancelled handover of UE with IMSI "
-              << imsi << " RNTI " << rnti << " to CellId " << targetCellId << std::endl;
+              << imsi << " RNTI " << rnti << " to CellId " << targetCellId << std::endl;*/
     simulationRegistry.emplace_back(imsi,
                                     cellid,
                                     rnti,
@@ -271,9 +275,11 @@ NotifyHandoverTriggeredEnb(std::string context,
                            uint16_t rnti,
                            uint16_t targetCellId)
 {
+    /*
     std::cout << context << " eNB CellId " << cellid
               << ": handover triggered RIC handover control of UE with IMSI " << imsi << " RNTI "
               << rnti << " to CellId " << targetCellId << std::endl;
+    */
     simulationRegistry.emplace_back(imsi,
                                     cellid,
                                     rnti,
@@ -291,8 +297,9 @@ NotifyHandoverTriggeredEnb(std::string context,
 void
 NotifyHandoverEndOkEnb(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
 {
+    /*
     std::cout << context << " eNB CellId " << cellid << ": completed handover of UE with IMSI "
-              << imsi << " RNTI " << rnti << std::endl;
+              << imsi << " RNTI " << rnti << std::endl;*/
     simulationRegistry.emplace_back(imsi, cellid, rnti, cellid, Registry::HANDOVER_OK_ENB);
 }
 
@@ -306,6 +313,7 @@ NotifyHandoverEndOkEnb(std::string context, uint64_t imsi, uint16_t cellid, uint
 void
 NotifyHandoverEndErrorUe(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
 {
+    
     std::cout << context << " eNB CellId " << cellid << ": completed handover of UE with IMSI "
               << imsi << " RNTI " << rnti << std::endl;
     simulationRegistry.emplace_back(imsi, cellid, rnti, cellid, Registry::HANDOVER_ERROR_UE);
@@ -333,7 +341,7 @@ main()
     GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
 
     // ── 변경 ──
-    uint16_t numberOfUes = 40;
+    uint16_t numberOfUes = 20;
     uint16_t numberOfEnbs = 3;
     uint16_t numBearersPerUe = 2;
     double enbTxPowerDbm = 32.0;
@@ -347,12 +355,13 @@ main()
     std::cout << "==========================" << std::endl;
 
     // ── 변경: 논문 트래픽 ──
-    Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(1)));
+    Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(10)));
     Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(512));
     Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(1000000));
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
     Config::SetDefault("ns3::LteEnbRrc::SrsPeriodicity", UintegerValue(80));
+    Config::SetDefault("ns3::LteEnbRrc::EpsBearerToRlcMapping",EnumValue(LteEnbRrc::RLC_UM_ALWAYS));
 
     Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
     Ptr<PointToPointEpcHelper> epcHelper = CreateObject<PointToPointEpcHelper>();
@@ -565,7 +574,7 @@ main()
     E2AP e2n1;
 
     // SON xApp: 주기 1초, 자체 핸드오버 ON
-    xAppHandoverSON sonxapp(0.5, false);
+    xAppHandoverSON sonxapp(1.0, false);
 
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);

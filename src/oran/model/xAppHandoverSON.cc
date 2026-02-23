@@ -60,7 +60,7 @@ xAppHandoverSON::PeriodicSONCheck()
 
     // 1. KPM 수집 (기존 로직 그대로)
     CollectKPMs();
-    if (m_stepCount % 10 == 0)
+    if (m_stepCount % 1 == 0)
     {
         LogCellMetrics();  // ★ 추가
     }
@@ -72,6 +72,7 @@ xAppHandoverSON::PeriodicSONCheck()
 
     std::cout << "\n[TICK] PeriodicSONCheck 불림 - Step: " << m_stepCount 
               << " | UE 수: " << m_ueContexts.size() << std::endl;
+    /*
     for (auto& [key, ue] : m_ueContexts)
     {
         // 변경 후
@@ -89,7 +90,7 @@ xAppHandoverSON::PeriodicSONCheck()
             << " CQI=" << ue.cqi
             << " isEdge=" << ue.isEdge << std::endl;
     }
-
+    */
     if (m_useMADDPG)
     {
         // ── MADDPG 경로 ──
@@ -165,10 +166,11 @@ xAppHandoverSON::CollectKPMs()
     //CollectThroughput();
 
     CalculateEdgeUEs();
+    PurgeStaleUeContexts();
+
     CollectUeCount();
     CollectCellThroughput();  // ★ 추가: 셀 단위 DL+UL throughput 집계
 
-    PurgeStaleUeContexts();
 }
 
 void
@@ -442,6 +444,26 @@ xAppHandoverSON::CollectCellThroughput()
             it->second.totalThroughputUl += delta;
     }
 
+    // DL/UL volume 후에 추가
+    // PRB utilization 수집 (구간값 — delta 불필요)
+    auto prbMap = ric->QueryKpmMetric("/KPM/RRU.PrbTotDl");
+    for (auto& [endpoint, measurements] : prbMap)
+    {
+        for (auto& m : measurements)
+        {
+            if (!m.measurements.contains("CELLID") ||
+                !m.measurements.contains("PRB_UTIL")) continue;
+            uint16_t cellId = m.measurements["CELLID"];
+            double util = m.measurements["PRB_UTIL"];
+            auto it = m_cellContexts.find(cellId);
+            if (it != m_cellContexts.end())
+            {
+                it->second.prbUtilDl = util;
+            }
+        }
+    }
+
+
     // bytes → kbps (SON 주기 기반)
     for (auto& [cellId, cell] : m_cellContexts)
     {
@@ -477,8 +499,8 @@ xAppHandoverSON::CollectCellThroughput()
         else
         {
             // delta=0이면 이전 값 유지
-            cell.totalThroughputDl = m_lastThroughputDl[cellId];
-            cell.totalThroughputUl = m_lastThroughputUl[cellId];
+            cell.totalThroughputDl = 0;
+            cell.totalThroughputUl = 0;
 
             std::cout << "[IpVol] Cell" << cellId
                 << " DL=" << (cell.totalThroughputDl / 1e3) << "Mbps"
@@ -487,13 +509,14 @@ xAppHandoverSON::CollectCellThroughput()
         }
         
 
-        double offeredMbps = cell.ueCount * 8.192;
+        double offeredMbps = cell.ueCount * 0.82;
         double actualMbps = cell.totalThroughputDl / 1e3;
         std::cout << "[SAT] Cell" << cellId
             << " UEs=" << cell.ueCount
             << " offered=" << offeredMbps << "Mbps"
             << " actual=" << actualMbps << "Mbps"
             << " ratio=" << (offeredMbps > 0 ? actualMbps / offeredMbps : 0)
+            << " PRB util=" << cell.prbUtilDl
             << std::endl;
     }
 }
@@ -1028,24 +1051,39 @@ xAppHandoverSON::BuildObservation(uint16_t cellId)
 
 // 논문 Eq.(7): r_i = Σ R_k (per-agent 셀 throughput)
 // 논문 코드: R_rewards = Throughput[2:5], 각 에이전트에 자기 셀 throughput 할당
-std::vector<double>
+std::vector<double> 
 xAppHandoverSON::ComputeRewards()
 {
-    std::vector<double> rewards;
+    // 1) 셀별 throughput 수집
+    std::vector<double> thps;
     for (auto cellId : m_cellIds)
     {
         auto it = m_cellContexts.find(cellId);
-        if (it != m_cellContexts.end())
-        {
-            // DL + UL 합산 (Mbps)
-            double totalThp = (it->second.totalThroughputDl
-                             + it->second.totalThroughputUl) / 1e3;
-            rewards.push_back(totalThp);
-        }
-        else
-        {
-            rewards.push_back(0.0);
-        }
+        double thp = (it != m_cellContexts.end())
+            ? (it->second.totalThroughputDl + it->second.totalThroughputUl) / 1e3
+            : 0.0;
+        thps.push_back(thp);
+    }
+
+    // 2) 부하 균형 패널티: UE 분포의 표준편차
+    std::vector<double> ueCounts;
+    for (auto cellId : m_cellIds)
+    {
+        auto it = m_cellContexts.find(cellId);
+        ueCounts.push_back(it != m_cellContexts.end() ? it->second.ueCount : 0.0);
+    }
+    double meanUe = std::accumulate(ueCounts.begin(), ueCounts.end(), 0.0) / ueCounts.size();
+    double variance = 0.0;
+    for (double u : ueCounts) variance += (u - meanUe) * (u - meanUe);
+    double stdUe = std::sqrt(variance / ueCounts.size());
+
+    // 3) 최종 reward: throughput + 균형 보너스
+    double alpha = 0.5;  // 균형 가중치
+    std::vector<double> rewards;
+    for (size_t i = 0; i < thps.size(); i++)
+    {
+        // 모든 에이전트에 동일한 균형 패널티 부여 (cooperative)
+        rewards.push_back(thps[i] - alpha * stdUe);
     }
     return rewards;
 }
@@ -1384,33 +1422,34 @@ void
 xAppHandoverSON::SaveModels(const std::string& dir)
 {
     NS_LOG_FUNCTION(this);
+        
+    if(m_inferenceOnly){
+        // 디렉토리 생성
+        std::string cmd = "mkdir -p " + dir;
+        system(cmd.c_str());
 
-    // 디렉토리 생성
-    std::string cmd = "mkdir -p " + dir;
-    system(cmd.c_str());
+        for (size_t i = 0; i < m_agents.size(); i++)
+        {
+            std::string prefix = dir + "/agent_" + std::to_string(i);
 
-    for (size_t i = 0; i < m_agents.size(); i++)
-    {
-        std::string prefix = dir + "/agent_" + std::to_string(i);
+            torch::save(m_agents[i]->GetActor(), prefix + "_actor.pt");
+            torch::save(m_agents[i]->GetCritic(), prefix + "_critic.pt");
+            torch::save(m_agents[i]->GetTargetActor(), prefix + "_target_actor.pt");
+            torch::save(m_agents[i]->GetTargetCritic(), prefix + "_target_critic.pt");
+        }
+        // ★ 버퍼 저장 로직 추가
+        std::string bufferPath = dir + "/replay_buffer.pt";
+        m_replayBuffer->Save(bufferPath);
 
-        torch::save(m_agents[i]->GetActor(), prefix + "_actor.pt");
-        torch::save(m_agents[i]->GetCritic(), prefix + "_critic.pt");
-        torch::save(m_agents[i]->GetTargetActor(), prefix + "_target_actor.pt");
-        torch::save(m_agents[i]->GetTargetCritic(), prefix + "_target_critic.pt");
+        NS_LOG_UNCOND("[MADDPG] Models & Buffer saved to " << dir
+            << "/ (step=" << m_stepCount << ", BufferSize=" << m_replayBuffer->Size() << ")");
+        
+        // 모델 저장 후
+        std::ofstream metaFile(dir + "/meta.txt");
+        metaFile << m_epsilon << std::endl;
+        metaFile << m_stepCount << std::endl;
+        metaFile.close();
     }
-    // ★ 버퍼 저장 로직 추가
-    std::string bufferPath = dir + "/replay_buffer.pt";
-    m_replayBuffer->Save(bufferPath);
-
-    NS_LOG_UNCOND("[MADDPG] Models & Buffer saved to " << dir
-        << "/ (step=" << m_stepCount << ", BufferSize=" << m_replayBuffer->Size() << ")");
-    
-    // 모델 저장 후
-    std::ofstream metaFile(dir + "/meta.txt");
-    metaFile << m_epsilon << std::endl;
-    metaFile << m_stepCount << std::endl;
-    metaFile.close();
-
 }
 
 void
@@ -1477,9 +1516,9 @@ xAppHandoverSON::InitCsvLoggers()
     {
         // 새로 작성
         m_cellMetricsCsv.open("cell_metrics.csv");
-        m_cellMetricsCsv << "episode,time_s,cellId,ueCount,edgeUeCount,"
+        m_cellMetricsCsv << "time_s,cellId,ueCount,edgeUeCount,"
             << "cellDlThp_kbps,cellUlThp_kbps,"
-            << "avgCqi,txPower_dBm" << std::endl;
+            << "avgCqi,txPower_dBm,prbUtilDl" << std::endl;
 
         m_cioActionsCsv.open("cio_actions.csv");
         m_cioActionsCsv << "episode,time_s,srcCellId,neighborCellId,cioDB,cioIE" << std::endl;
@@ -1509,7 +1548,7 @@ xAppHandoverSON::LogCellMetrics()
         }
         if (cqiCount > 0) avgCqi /= cqiCount;
 
-        m_cellMetricsCsv << m_episode << ","
+        m_cellMetricsCsv 
             << now << ","
             << cellId << ","
             << cell.ueCount << ","
@@ -1517,6 +1556,7 @@ xAppHandoverSON::LogCellMetrics()
             << cell.totalThroughputDl << ","
             << cell.totalThroughputUl << ","
             << avgCqi << ","
-            << cell.txPower << std::endl;
+            << cell.txPower << ","
+            << cell.prbUtilDl << std::endl;
     }
 }

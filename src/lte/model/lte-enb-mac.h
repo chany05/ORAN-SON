@@ -73,7 +73,9 @@ class LteEnbMac : public Object
      * \return the object TypeId
      */
     static TypeId GetTypeId();
-
+    uint64_t GetDlRbUsed() const { return m_dlRbUsed; }
+    void ResetPrbCounters() { m_dlRbUsed = 0; m_dlSubframeCount = 0; }
+    uint64_t GetDlSubframeCount() const { return m_dlSubframeCount; }
     LteEnbMac();
     ~LteEnbMac() override;
     void DoDispose() override;
@@ -205,6 +207,12 @@ class LteEnbMac : public Object
      */
     void ReceiveDlCqiLteControlMessage(Ptr<DlCqiLteControlMessage> msg);
 
+    uint64_t m_dlRbUsed = 0;
+    // 기존 GetDlRbUsed() 유지하고 추가:
+
+    uint64_t m_dlSubframeCount = 0;
+
+    
     /**
      * \brief Receive a DL CQI ideal control message
      * \param msg the DL CQI message

@@ -1091,6 +1091,43 @@ void
 LteEnbMac::DoSchedDlConfigInd(FfMacSchedSapUser::SchedDlConfigIndParameters ind)
 {
     NS_LOG_FUNCTION(this);
+
+    // PRB utilization 카운트
+    uint32_t rbgUsedThisSubframe = 0;
+    for (std::size_t i = 0; i < ind.m_buildDataList.size(); i++)
+    {
+        uint16_t rnti = ind.m_buildDataList.at(i).m_rnti;
+        // RNTI=0 또는 RA-RNTI(>= 0xFFF0)는 SIB/RAR → 제외
+        if (rnti == 0 || rnti >= 0xFFF0) continue;
+        
+        // 실제 UE 데이터가 있는지 확인 (새 전송만)
+        bool hasNewData = false;
+        for (std::size_t layer = 0; layer < ind.m_buildDataList.at(i).m_dci.m_ndi.size(); layer++)
+        {
+            if (ind.m_buildDataList.at(i).m_dci.m_ndi.at(layer) == 1 &&
+                ind.m_buildDataList.at(i).m_dci.m_tbsSize.at(layer) > 0)
+            {
+                hasNewData = true;
+                break;
+            }
+        }
+        if (!hasNewData) continue;
+        
+        uint32_t bitmap = ind.m_buildDataList.at(i).m_dci.m_rbBitmap;
+        rbgUsedThisSubframe |= bitmap;
+    }
+    m_dlRbUsed += __builtin_popcount(rbgUsedThisSubframe);
+    m_dlSubframeCount++;
+    // PRB 카운트 블록에서
+    if (m_dlSubframeCount % 1000 == 1)
+    {
+        /*
+        std::cout << "[PRB-MAC] sf=" << m_dlSubframeCount
+            << " dataEntries=" << ind.m_buildDataList.size()
+            << " filteredRbg=" << __builtin_popcount(rbgUsedThisSubframe)
+            << std::endl;*/
+    }
+
     // Create DL PHY PDU
     Ptr<PacketBurst> pb = CreateObject<PacketBurst>();
     std::map<LteFlowId_t, LteMacSapUser*>::iterator it;

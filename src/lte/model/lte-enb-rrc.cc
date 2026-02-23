@@ -47,6 +47,7 @@
 #include <ns3/lte-enb-mac.h>       // <-- 추가
 #include <ns3/lte-pdcp.h>      // <-- 추가
 #include <ns3/lte-enb-phy.h>      // <-- 추가
+#include "lte-enb-mac.h"
 
 namespace ns3
 {
@@ -1679,15 +1680,39 @@ LteEnbRrc::PublishCellKpm()
                         cellUlBytes += drbInfo->m_pdcp->GetRxBytes();
                     }
                 }
+            
+                        
             }
+            // ── monotonic DL/UL 카운터 ──
+            {
+                int64_t dlInterval = 0;
+                if (m_prevPublishDlBytes.count(cellId))
+                    dlInterval = (int64_t)cellDlBytes - (int64_t)m_prevPublishDlBytes[cellId];
+                if (dlInterval < 0) dlInterval = 0;
+                m_prevPublishDlBytes[cellId] = cellDlBytes;
+                m_monotonicDlBytes[cellId] += (uint64_t)dlInterval;
 
+                int64_t ulInterval = 0;
+                if (m_prevPublishUlBytes.count(cellId))
+                    ulInterval = (int64_t)cellUlBytes - (int64_t)m_prevPublishUlBytes[cellId];
+                if (ulInterval < 0) ulInterval = 0;
+                m_prevPublishUlBytes[cellId] = cellUlBytes;
+                m_monotonicUlBytes[cellId] += (uint64_t)ulInterval;
+            }
+            /*
+            std::cout << "[KPM-RAW] Cell" << cellId 
+                << " cumDlBytes=" << cellDlBytes 
+                << " monoDl=" << m_monotonicDlBytes[cellId]
+                << " time=" << Simulator::Now().GetSeconds() 
+                << std::endl;
+            */
             Json volJson;
             volJson["CELLID"] = cellId;
 
-            volJson["VALUE"] = (int64_t)cellDlBytes;
+            volJson["VALUE"] = (int64_t)m_monotonicDlBytes[cellId];
             e2ap->PublishToEndpointSubscribers("/KPM/DRB.IpVolDl.QCI", volJson);
 
-            volJson["VALUE"] = (int64_t)cellUlBytes;
+            volJson["VALUE"] = (int64_t)m_monotonicUlBytes[cellId];
             e2ap->PublishToEndpointSubscribers("/KPM/DRB.IpVolUl.QCI", volJson);
             /*
             std::cout << "[CellKPM] Cell" << cellId
@@ -1696,6 +1721,42 @@ LteEnbRrc::PublishCellKpm()
                 << " UEs=" << m_ueMap.size()
                 << " @" << Simulator::Now().GetSeconds() << "s" << std::endl;
             */
+
+            // IpVol 블록 뒤에 추가
+        
+        
+            auto it = m_componentCarrierPhyConf.find(0);
+            if (it != m_componentCarrierPhyConf.end())
+            {
+                Ptr<ComponentCarrierEnb> ccEnb = DynamicCast<ComponentCarrierEnb>(it->second);
+                if (ccEnb)
+                {
+                    Ptr<LteEnbMac> mac = ccEnb->GetMac();
+                    if (mac)
+                    {
+                        uint64_t rbUsed = mac->GetDlRbUsed();
+                        uint64_t sfCount = mac->GetDlSubframeCount();
+
+                        if (sfCount > 0)
+                        {
+                            double prbUtil = (double)rbUsed / sfCount / 25.0;
+                            /*
+                            std::cout << "[PRB-PUB] Cell" << cellId
+                                << " rbUsed=" << rbUsed
+                                << " sfCount=" << sfCount
+                                << " util=" << prbUtil << std::endl;*/
+                            Json prbJson;
+                            prbJson["CELLID"] = (int64_t)cellId;
+                            prbJson["PRB_UTIL"] = prbUtil;
+                            e2ap->PublishToEndpointSubscribers("/KPM/RRU.PrbTotDl", prbJson);
+
+                            mac->ResetPrbCounters();  // ★ 구간 리셋
+                        }
+                    }
+                }
+            }
+        
+        
 
         }
     }
