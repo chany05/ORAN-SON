@@ -33,6 +33,7 @@ struct CellContext
     double avgCqi;
     double totalThroughputDl;
     double totalThroughputUl;
+    double prbUtilDl = 0.0;
     uint32_t ueCount;
     uint32_t edgeUeCount;
     double loadScore;
@@ -338,9 +339,10 @@ class xAppHandoverSON : public xAppHandover
     std::map<uint16_t, double> m_prevCellDlBytes;
     std::map<uint16_t, double> m_prevCellUlBytes;
 
+
     // ── MADDPG (FineBalancer 논문 사양) ──────────────
     bool m_useMADDPG = true;
-    bool m_loadPretrained = false;
+    bool m_loadPretrained = true;
     bool m_inferenceOnly = false;
     int m_episode = 0;
 
@@ -357,7 +359,7 @@ class xAppHandoverSON : public xAppHandover
     // 탐색
     double m_epsilon = 1.0;
     static constexpr double EPSILON_END   = 1e-15;
-    static constexpr double EPSILON_DECAY = 0.999;
+    static constexpr double EPSILON_DECAY = 0.995;
     static constexpr double EXPL_NOISE    = 0.1;
 
     // 에이전트 + 버퍼
