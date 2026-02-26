@@ -930,17 +930,21 @@ xAppHandoverSON::InitMADDPG()
     m_neighborMap[2] = {1, 3};
     m_neighborMap[3] = {1, 2};
 
-    // 논문: Critic = 전체 에이전트 state + action 결합
-    // totalObsDim = 3 × 4 = 12, totalActDim = 3 × 2 = 6
+    // actDim = 이웃 셀 수 + 1(TXP) — 이웃 수에 따라 자동 결정
+    // totalActDim = Σ(각 에이전트의 actDim)
     int64_t totalObsDim = NUM_AGENTS * OBS_DIM;
-    int64_t totalActDim = NUM_AGENTS * ACT_DIM;
+    int64_t totalActDim = 0;
+    for (auto cellId : m_cellIds)
+    {
+        totalActDim += static_cast<int64_t>(m_neighborMap[cellId].size()) + 1;
+    }
 
     for (auto cellId : m_cellIds)
     {
         AgentConfig config;
         config.cellId = cellId;
         config.obsDim = OBS_DIM;
-        config.actDim = ACT_DIM;
+        config.actDim = static_cast<int64_t>(m_neighborMap[cellId].size()) + 1;  // per-neighbor CIO + TXP
         config.neighborCellIds = m_neighborMap[cellId];
 
         m_agents.push_back(std::make_unique<MADDPGAgent>(
@@ -950,7 +954,15 @@ xAppHandoverSON::InitMADDPG()
     m_replayBuffer = std::make_unique<ReplayBuffer>(BUFFER_SIZE);
 
     NS_LOG_UNCOND("[MADDPG] Initialized: " << NUM_AGENTS << " agents, "
-        << "Obs=" << OBS_DIM << " Act=" << ACT_DIM
+        << "Obs=" << OBS_DIM
+        << " ActDim=[");
+    for (size_t i = 0; i < m_agents.size(); i++)
+    {
+        NS_LOG_UNCOND("  Cell " << m_agents[i]->GetConfig().cellId
+            << ": actDim=" << m_agents[i]->GetConfig().actDim
+            << " (neighbors=" << m_agents[i]->GetConfig().neighborCellIds.size() << ")");
+    }
+    NS_LOG_UNCOND("] totalActDim=" << totalActDim
         << " CriticInput=" << (totalObsDim + totalActDim)
         << " MaxAction=" << MAX_ACTION);
 
@@ -1203,23 +1215,24 @@ xAppHandoverSON::StepMADDPG()
     {
         torch::Tensor act;
         uint16_t srcCell = m_agents[i]->GetConfig().cellId;
+        int64_t agentActDim = m_agents[i]->GetConfig().actDim;
 
         if (!m_inferenceOnly && uniformDist(rng) <= m_epsilon)
         {
             // ε-greedy: 랜덤 행동
-            std::vector<float> randAct(ACT_DIM);
-            for (int d = 0; d < ACT_DIM; d++)
+            std::vector<float> randAct(agentActDim);
+            for (int64_t d = 0; d < agentActDim; d++)
                 randAct[d] = static_cast<float>(randomAction(rng));
-            act = torch::from_blob(randAct.data(), {ACT_DIM}, torch::kFloat32).clone();
+            act = torch::from_blob(randAct.data(), {agentActDim}, torch::kFloat32).clone();
         }
         else if (!m_inferenceOnly)
         {
             // Actor + 가우시안 노이즈
             act = m_agents[i]->SelectAction(currentObs[i]);
-            std::vector<float> noise(ACT_DIM);
-            for (int d = 0; d < ACT_DIM; d++)
+            std::vector<float> noise(agentActDim);
+            for (int64_t d = 0; d < agentActDim; d++)
                 noise[d] = static_cast<float>(noiseDist(rng));
-            auto noiseTensor = torch::from_blob(noise.data(), {ACT_DIM}, torch::kFloat32).clone();
+            auto noiseTensor = torch::from_blob(noise.data(), {agentActDim}, torch::kFloat32).clone();
             act = torch::clamp(act + noiseTensor,
                               -static_cast<float>(MAX_ACTION),
                                static_cast<float>(MAX_ACTION));
@@ -1234,63 +1247,87 @@ xAppHandoverSON::StepMADDPG()
 
         auto actData = act.accessor<float, 1>();
         const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
+        int txpIdx = static_cast<int>(neighbors.size());  // TXP는 마지막 인덱스
 
-        // ── [0] CIO 변환 ──
-        // action[0] ∈ [-1, 1] → ×5 → round → ±5 dB
-        // 3GPP TS 36.331 §6.3.6: q-OffsetCell IE = dB / 0.5
-        int cioDB = static_cast<int>(std::round(actData[0] * 5.0));
-        cioDB = std::max(-5, std::min(5, cioDB));
-        int cioIE = cioDB * 2;
-
+        // ── per-neighbor CIO 변환 ──
+        // action[0..N-1] ∈ [-1, 1] → 각 이웃별 독립 CIO
+        // 3GPP TS 36.331 §6.3.6: q-OffsetCell IE = dB × 2 (0.5dB 단위)
         Json cioList = Json::array();
-        for (auto nId : neighbors)
+        for (size_t n = 0; n < neighbors.size(); n++)
         {
+            int cioDB = static_cast<int>(std::round(actData[n] * 5.0));
+            cioDB = std::max(-5, std::min(5, cioDB));
+            int cioIE = cioDB * 2;
+
             Json entry;
-            entry["CELL_ID"] = nId;
+            entry["CELL_ID"] = neighbors[n];
             entry["CIO_VALUE"] = cioIE;
             cioList.push_back(entry);
         }
         std::string endpoint = "/E2Node/" + std::to_string(srcCell) + "/";
         ric->E2SmRcSendCioControlRequest(cioList, endpoint);
 
-        // ── [1] TXP 변환 ──
-        // action[1] ∈ [-1, 1] → ×4 → ±4 dBm offset from base
-        double txpOffset = static_cast<double>(actData[1]) * 4.0;
+        // ── TXP 변환 (마지막 action 차원) ──
+        // action[N] ∈ [-1, 1] → ×4 → ±4 dBm offset from base
+        double txpOffset = static_cast<double>(actData[txpIdx]) * 4.0;
         double txpApplied = m_txPower + txpOffset;
         txpApplied = std::max(26.0, std::min(38.0, txpApplied));
 
         ric->E2SmRcSendTxPowerControlRequest(txpApplied, endpoint);
 
+        // ── 콘솔 로그 ──
         std::cout << "[ACT] Step=" << m_stepCount
-            << " Cell" << srcCell
-            << " CIO=" << cioDB << "dB"
-            << " TXP=" << txpApplied << "dBm(off=" << txpOffset << ")"
-            << " raw=[" << actData[0] << "," << actData[1] << "]"
-            << std::endl;
-        if (m_stepCount % 10 == 0)
+            << " Cell" << srcCell << " CIO=[";
+        for (size_t n = 0; n < neighbors.size(); n++)
         {
-            // ★ CSV 로깅
+            int cioDB = static_cast<int>(std::round(actData[n] * 5.0));
+            cioDB = std::max(-5, std::min(5, cioDB));
+            std::cout << " " << neighbors[n] << ":" << cioDB << "dB";
+            if (n + 1 < neighbors.size()) std::cout << ", ";
+        }
+        std::cout << "] TXP=" << txpApplied << "dBm(off=" << txpOffset << ")"
+            << " raw=[";
+        for (int64_t d = 0; d < agentActDim; d++)
+        {
+            std::cout << actData[d];
+            if (d + 1 < agentActDim) std::cout << ",";
+        }
+        std::cout << "]" << std::endl;
+
+        //if (m_stepCount % 10 == 0)
+        {
             double now = Simulator::Now().GetSeconds();
 
-            // CIO 로그 — 각 이웃별로 기록
-            for (auto nId : neighbors)
+            // CIO 로그 — 이웃별 독립 CIO 기록
+            for (size_t n = 0; n < neighbors.size(); n++)
             {
+                int cioDB = static_cast<int>(std::round(actData[n] * 5.0));
+                cioDB = std::max(-5, std::min(5, cioDB));
+                int cioIE = cioDB * 2;
                 m_cioActionsCsv << now << ","
-                    << srcCell << "," << nId << ","
+                    << srcCell << "," << neighbors[n] << ","
                     << cioDB << "," << cioIE << std::endl;
             }
 
-            // MADDPG 행동 로그
+            // MADDPG 행동 로그 — 모든 raw action + 변환값
             double cellThp = 0.0;
             auto cellIt = m_cellContexts.find(srcCell);
             if (cellIt != m_cellContexts.end())
                 cellThp = cellIt->second.totalThroughputDl + cellIt->second.totalThroughputUl;
 
-            m_maddpgActionsCsv << now << ","
-                << srcCell << ","
-                << actData[0] << "," << actData[1] << ","
-                << cioDB << "," << txpApplied << ","
-                << cellThp << "," << m_epsilon << std::endl;
+            m_maddpgActionsCsv << now << "," << srcCell;
+            // raw actions
+            for (int64_t d = 0; d < agentActDim; d++)
+                m_maddpgActionsCsv << "," << actData[d];
+            // converted CIO dB values
+            for (size_t n = 0; n < neighbors.size(); n++)
+            {
+                int cioDB = static_cast<int>(std::round(actData[n] * 5.0));
+                cioDB = std::max(-5, std::min(5, cioDB));
+                m_maddpgActionsCsv << "," << cioDB;
+            }
+            m_maddpgActionsCsv << "," << txpApplied
+                << "," << cellThp << "," << m_epsilon << std::endl;
         }
     }
 
@@ -1519,7 +1556,7 @@ xAppHandoverSON::LoadModels(const std::string& dir)
     // ★ 버퍼 불러오기 로직 추가
     std::string bufferPath = dir + "/replay_buffer.pt";
     try {
-        m_replayBuffer->Load(bufferPath, OBS_DIM, ACT_DIM, NUM_AGENTS);
+        m_replayBuffer->Load(bufferPath, OBS_DIM, 0 /*unused*/, NUM_AGENTS);
         NS_LOG_UNCOND("[MADDPG] Buffer loaded successfully. Size: " << m_replayBuffer->Size());
     } catch (const std::exception& e) {
         NS_LOG_WARN("[MADDPG] Failed to load buffer from " << bufferPath << ": " << e.what());
@@ -1558,8 +1595,17 @@ xAppHandoverSON::InitCsvLoggers()
         m_cioActionsCsv << "time_s,srcCellId,neighborCellId,cioDB,cioIE" << std::endl;
 
         m_maddpgActionsCsv.open("maddpg_actions.csv");
-        m_maddpgActionsCsv << "episode,time_s,cellId,cioRawAction,txpRawAction,"
-            << "cioDB,txpApplied_dBm,cellThp_kbps,epsilon" << std::endl;
+        // 동적 헤더: 이웃 수에 따라 CIO 컬럼 자동 생성
+        size_t maxNeighbors = 0;
+        for (auto& [cellId, neighbors] : m_neighborMap)
+            maxNeighbors = std::max(maxNeighbors, neighbors.size());
+        m_maddpgActionsCsv << "time_s,cellId";
+        for (size_t n = 0; n < maxNeighbors; n++)
+            m_maddpgActionsCsv << ",cioRaw_n" << n;
+        m_maddpgActionsCsv << ",txpRaw";
+        for (size_t n = 0; n < maxNeighbors; n++)
+            m_maddpgActionsCsv << ",cioDB_n" << n;
+        m_maddpgActionsCsv << ",txpApplied_dBm,cellThp_kbps,epsilon" << std::endl;
 
         m_rewardCurveCsv.open("reward_curve.csv");
         m_rewardCurveCsv << "time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std" << std::endl;

@@ -348,7 +348,7 @@ class xAppHandoverSON : public xAppHandover
 
     static constexpr int    NUM_AGENTS   = 3;
     static constexpr int    OBS_DIM      = 4;       // [AvgCqi, Thp, FarUes, ServedUes]
-    static constexpr int    ACT_DIM      = 2;       // [CIO, TXP]
+    // ACT_DIM은 이웃 셀 수에 따라 동적 결정: neighbors.size() + 1 (per-neighbor CIO + TXP)
     static constexpr double MAX_ACTION   = 1.0;
     static constexpr size_t BUFFER_SIZE  = 10000;
     static constexpr size_t BATCH_SIZE   = 128;
