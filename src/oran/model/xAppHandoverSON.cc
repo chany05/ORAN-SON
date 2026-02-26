@@ -279,8 +279,7 @@ xAppHandoverSON::CollectCqi()
             uint16_t cellId = measurement.measurements["CELLID"];
 
             UeKey key = MakeUeKey(cellId, rnti);
-            if (m_ueContexts.find(key) != m_ueContexts.end() &&
-                m_ueContexts[key].cqi == 0)
+            if (m_ueContexts.find(key) != m_ueContexts.end())
             {
                 m_ueContexts[key].cqi = measurement.measurements["VALUE"];
             }
@@ -1015,17 +1014,19 @@ xAppHandoverSON::BuildObservation(uint16_t cellId)
         }
     }
     if (cqiCount > 0) avgCqi /= cqiCount;
-    obs[0] = avgCqi;
+    obs[0] = avgCqi / 15.0f;  // ★ 정규화: CQI 0~15 → [0,1]
 
-    // [1] Throughput — T_i (Mbps)
-    obs[1] = static_cast<float>(cell.totalThroughputDl / 1e3);
+    // [1] Per-cell Throughput — T_i (정규화: Mbps/30 → ~[0,1])
+    obs[1] = static_cast<float>(cell.totalThroughputDl / 1e3) / 30.0f;  // ★ per-cell, 40UE 포화 기준
 
-    // [2] FarUes — E_i (edge UE 비율)
+    // [2] FarUes — E_i (edge UE 비율, 이미 0~1)
     obs[2] = (ueWithData > 0)
         ? static_cast<float>(edgeCount) / ueWithData : 0.0f;
 
-    // [3] ServedUes — N_i (UE 수)
-    obs[3] = static_cast<float>(cell.ueCount);
+    // [3] UE count — N_i (정규화: ueCount/totalUEs → [0,1])
+    uint32_t totalUEs = m_ueContexts.size();
+    obs[3] = (totalUEs > 0)
+        ? static_cast<float>(cell.ueCount) / static_cast<float>(totalUEs) : 0.0f;
 
     return torch::from_blob(obs.data(), {OBS_DIM}, torch::kFloat32).clone();
 }
@@ -1054,37 +1055,73 @@ xAppHandoverSON::BuildObservation(uint16_t cellId)
 std::vector<double> 
 xAppHandoverSON::ComputeRewards()
 {
-    // 1) 셀별 throughput 수집
+    // 1) 셀별 per-cell throughput 수집
     std::vector<double> thps;
     for (auto cellId : m_cellIds)
     {
         auto it = m_cellContexts.find(cellId);
-        double thp = (it != m_cellContexts.end())
-            ? (it->second.totalThroughputDl + it->second.totalThroughputUl) / 1e3
-            : 0.0;
+        double thp = 0.0;
+        if (it != m_cellContexts.end())
+        {
+            thp = (it->second.totalThroughputDl + it->second.totalThroughputUl)
+                / 1e3 / 30.0;  // per-cell throughput 정규화 (~0~1)
+        }
+        std::cout << "cellId: " << cellId << " thp: " << thp << std::endl;
         thps.push_back(thp);
     }
 
-    // 2) 부하 균형 패널티: UE 분포의 표준편차
-    std::vector<double> ueCounts;
+    // 2) PRB 균형 패널티
+    std::vector<double> prbUtils;
     for (auto cellId : m_cellIds)
     {
         auto it = m_cellContexts.find(cellId);
-        ueCounts.push_back(it != m_cellContexts.end() ? it->second.ueCount : 0.0);
+        prbUtils.push_back(it != m_cellContexts.end() ? it->second.prbUtilDl : 0.0);
     }
-    double meanUe = std::accumulate(ueCounts.begin(), ueCounts.end(), 0.0) / ueCounts.size();
-    double variance = 0.0;
-    for (double u : ueCounts) variance += (u - meanUe) * (u - meanUe);
-    double stdUe = std::sqrt(variance / ueCounts.size());
+    double meanPrb = std::accumulate(prbUtils.begin(), prbUtils.end(), 0.0) / prbUtils.size();
+    double prbVar = 0.0;
+    for (double p : prbUtils) prbVar += (p - meanPrb) * (p - meanPrb);
+    double stdPrb = std::sqrt(prbVar / prbUtils.size());
 
-    // 3) 최종 reward: throughput + 균형 보너스
-    double alpha = 0.5;  // 균형 가중치
+    // 3) UE 분배 균형 패널티
+    std::vector<double> ueCounts;
+    double totalUEs = 0.0;
+    for (auto cellId : m_cellIds)
+    {
+        auto it = m_cellContexts.find(cellId);
+        double ue = (it != m_cellContexts.end()) ? (double)it->second.ueCount : 0.0;
+        ueCounts.push_back(ue);
+        totalUEs += ue;
+    }
+    double meanUe = totalUEs / ueCounts.size();
+    double ueVar = 0.0;
+    for (double u : ueCounts) ueVar += (u - meanUe) * (u - meanUe);
+    double stdUe = std::sqrt(ueVar / ueCounts.size());
+    double stdUeNorm = (totalUEs > 0) ? stdUe / totalUEs : 0.0;  // 0~1 정규화
+
+    std::cout << " stdPrb: " << stdPrb
+              << " stdUe: " << stdUe << " stdUeNorm: " << stdUeNorm << std::endl;
+
+    // 4) 최종 reward: per-cell thp - PRB 패널티 - UE 균형 패널티
+    double alpha = 2.0;   // PRB 균형 가중치
+    double beta  = 5.0;  // UE 분배 균형 가중치
     std::vector<double> rewards;
     for (size_t i = 0; i < thps.size(); i++)
     {
-        // 모든 에이전트에 동일한 균형 패널티 부여 (cooperative)
-        rewards.push_back(thps[i] - alpha * stdUe);
+        double r = thps[i] - alpha * stdPrb - beta * stdUeNorm;
+        rewards.push_back(r);
+        std::cout << " reward: " << r << std::endl;
     }
+
+    // ★ reward curve 로깅
+    if (m_rewardCurveCsv.is_open())
+    {
+        double now = Simulator::Now().GetSeconds();
+        m_rewardCurveCsv << now << "," << m_stepCount;
+        for (size_t i = 0; i < rewards.size(); i++)
+            m_rewardCurveCsv << "," << rewards[i];
+        m_rewardCurveCsv << "," << stdPrb << "," << stdUeNorm << std::endl;
+    }
+
     return rewards;
 }
 
@@ -1115,17 +1152,23 @@ xAppHandoverSON::StepMADDPG()
         currentObs.push_back(BuildObservation(m_agents[i]->GetConfig().cellId));
     }
 
-    // ── 이전 전이를 replay buffer에 저장 ──
+    // ── 이전 전이를 replay buffer에 저장 (학습 모드만) ──
     if (m_hasPrevStep)
     {
         auto rewards = ComputeRewards();
-        Experience exp;
-        exp.obs = m_prevObs;
-        exp.acts = m_prevActs;
-        exp.rewards = rewards;
-        exp.nextObs = currentObs;
-        exp.done = false;
-        m_replayBuffer->Push(std::move(exp));
+
+        if (!m_inferenceOnly)
+        {
+            Experience exp;
+            exp.obs = m_prevObs;
+            exp.acts = m_prevActs;
+            exp.rewards = rewards;
+            exp.nextObs = currentObs;
+            // 시뮬레이션 종료 직전이면 done=true → target Q에서 γ×Q'(next) 제거
+            double now = Simulator::Now().GetSeconds();
+            exp.done = (m_simStopTime - now <= m_sonPeriodicitySec * 2.0);
+            m_replayBuffer->Push(std::move(exp));
+        }
 
         if (m_stepCount % 10 == 0)
         {
@@ -1135,12 +1178,12 @@ xAppHandoverSON::StepMADDPG()
                 << " BufferSize=" << m_replayBuffer->Size()
                 << " Epsilon=" << m_epsilon);
 
-                       
+
             // NS_LOG_UNCOND 대신 std::cout 사용!
             std::cout << "🚀 [MADDPG] Step=" << m_stepCount
                     << " | Reward=" << rewards[0] << ", " << rewards[1] << ", " << rewards[2]
                     << " | BufferSize=" << m_replayBuffer->Size() << std::endl;
-            
+
         }
     }
 
@@ -1193,15 +1236,11 @@ xAppHandoverSON::StepMADDPG()
         const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
 
         // ── [0] CIO 변환 ──
-        // 논문 코드: env_action1 = round(action[0] * 0.5, 0) → 정수 dB
-        // 3GPP TS 36.331 §6.3.6: q-OffsetCell
-        // 글로벌 CIO: 모든 이웃에 동일 값 적용
-        //
-        // 숫자 예시: action[0]=4.2 → 4.2×0.5=2.1 → round=2 dB → IE=4
-        //           action[0]=-6.0 → -6.0×0.5=-3.0 → -3 dB → IE=-6
-        int cioDB = static_cast<int>(std::round(actData[0] * 0.5));
-        cioDB = std::max(-6, std::min(6, cioDB));
-        int cioIE = cioDB * 2;  // dB → IE (0.5dB 단위): dB / 0.5 = dB × 2
+        // action[0] ∈ [-1, 1] → ×5 → round → ±5 dB
+        // 3GPP TS 36.331 §6.3.6: q-OffsetCell IE = dB / 0.5
+        int cioDB = static_cast<int>(std::round(actData[0] * 5.0));
+        cioDB = std::max(-5, std::min(5, cioDB));
+        int cioIE = cioDB * 2;
 
         Json cioList = Json::array();
         for (auto nId : neighbors)
@@ -1215,25 +1254,19 @@ xAppHandoverSON::StepMADDPG()
         ric->E2SmRcSendCioControlRequest(cioList, endpoint);
 
         // ── [1] TXP 변환 ──
-        // 논문 코드: env_action2 = round(action[1], 4) → dBm offset
-        // 기본 TXP에 offset 적용, clamp [30, 46]
-        //
-        // 숫자 예시: action[1]=3.5 → TXP=46+3.5=49.5 → clamp→46.0
-        //           action[1]=-5.0 → TXP=46-5.0=41.0
-        double rawTxpOffset = static_cast<double>(actData[1]);
-        
-        // ★ 논문과 100% 동일하게 소수점 4자리 반올림 (Python np.round(val, 4) 완벽 모사)
-        double paperTxpOffset = std::round(rawTxpOffset * 10000.0) / 10000.0;
-        
-        double txpApplied = m_txPower + paperTxpOffset;
-        txpApplied = std::max(20.0, std::min(46.0, txpApplied)); // 논문의 한계선 적용
+        // action[1] ∈ [-1, 1] → ×4 → ±4 dBm offset from base
+        double txpOffset = static_cast<double>(actData[1]) * 4.0;
+        double txpApplied = m_txPower + txpOffset;
+        txpApplied = std::max(26.0, std::min(38.0, txpApplied));
 
         ric->E2SmRcSendTxPowerControlRequest(txpApplied, endpoint);
 
-        // 기존 로그 아래에 추가
-        NS_LOG_UNCOND("[MADDPG] Cell" << srcCell
-            << " CIO=" << cioDB << "dB(IE=" << cioIE << ")"
-            << " TXP=" << txpApplied << "dBm(offset=" << paperTxpOffset<< ")");
+        std::cout << "[ACT] Step=" << m_stepCount
+            << " Cell" << srcCell
+            << " CIO=" << cioDB << "dB"
+            << " TXP=" << txpApplied << "dBm(off=" << txpOffset << ")"
+            << " raw=[" << actData[0] << "," << actData[1] << "]"
+            << std::endl;
         if (m_stepCount % 10 == 0)
         {
             // ★ CSV 로깅
@@ -1261,8 +1294,8 @@ xAppHandoverSON::StepMADDPG()
         }
     }
 
-    // ── epsilon 감소 ──
-    if (m_epsilon > EPSILON_END)
+    // ── epsilon 감소 (학습 모드만) ──
+    if (!m_inferenceOnly && m_epsilon > EPSILON_END)
     {
         m_epsilon *= EPSILON_DECAY;
     }
@@ -1313,6 +1346,7 @@ xAppHandoverSON::TrainMADDPG()
     std::vector<torch::Tensor> actsBatch(NUM_AGENTS);
     std::vector<torch::Tensor> nextObsBatch(NUM_AGENTS);
     std::vector<torch::Tensor> rewardBatch(NUM_AGENTS);
+    auto doneBatch = torch::zeros({(long)B, 1});  // done 마스크
 
     for (int a = 0; a < NUM_AGENTS; a++)
     {
@@ -1325,6 +1359,7 @@ xAppHandoverSON::TrainMADDPG()
             aVec.push_back(batch[b].acts[a]);
             noVec.push_back(batch[b].nextObs[a]);
             rewardBatch[a][b][0] = batch[b].rewards[a];
+            if (a == 0) doneBatch[b][0] = batch[b].done ? 1.0f : 0.0f;
         }
         obsBatch[a] = torch::stack(oVec);       // (B, 4)
         actsBatch[a] = torch::stack(aVec);       // (B, 2)
@@ -1356,7 +1391,8 @@ xAppHandoverSON::TrainMADDPG()
         {
             torch::NoGradGuard noGrad;
             targetQ = agent->GetTargetCritic()->forward(allNextObs, allTargetNextActs);
-            targetQ = rewardBatch[i] + GAMMA * targetQ;
+            // done=1이면 γ×Q'(next)=0 → target Q = reward만
+            targetQ = rewardBatch[i] + GAMMA * (1.0 - doneBatch) * targetQ;
         }
 
         auto currentQ = agent->GetCritic()->forward(allObs, allActs);
@@ -1364,6 +1400,7 @@ xAppHandoverSON::TrainMADDPG()
 
         agent->GetCriticOpt().zero_grad();
         criticLoss.backward();
+        torch::nn::utils::clip_grad_norm_(agent->GetCritic()->parameters(), 0.5);
         agent->GetCriticOpt().step();
 
         // ─ Actor 업데이트 — 논문 Eq.(10) ─
@@ -1382,6 +1419,7 @@ xAppHandoverSON::TrainMADDPG()
 
         agent->GetActorOpt().zero_grad();
         actorLoss.backward();
+        torch::nn::utils::clip_grad_norm_(agent->GetActor()->parameters(), 0.5);
         agent->GetActorOpt().step();
 
         // ─ Target Soft Update — 논문 Eq.(11)(12) ─
@@ -1423,7 +1461,7 @@ xAppHandoverSON::SaveModels(const std::string& dir)
 {
     NS_LOG_FUNCTION(this);
         
-    if(m_inferenceOnly){
+    if(!m_inferenceOnly){
         // 디렉토리 생성
         std::string cmd = "mkdir -p " + dir;
         system(cmd.c_str());
@@ -1493,39 +1531,38 @@ xAppHandoverSON::LoadModels(const std::string& dir)
     {
         metaFile >> m_epsilon;
         metaFile >> m_stepCount;
-        metaFile >> m_episode;
         metaFile.close();
-        m_episode++;  // 새 실행 = 새 에피소드
         NS_LOG_UNCOND("[MADDPG] Restored epsilon=" << m_epsilon
-            << " stepCount=" << m_stepCount
-            << " episode=" << m_episode);
+            << " stepCount=" << m_stepCount);
     }
 }
 
 void
 xAppHandoverSON::InitCsvLoggers()
 {
-    if (m_loadPretrained)
+    if (m_loadPretrained | m_inferenceOnly)
     {
-        // 이어쓰기
         m_cellMetricsCsv.open("cell_metrics.csv", std::ios::app);
         m_cioActionsCsv.open("cio_actions.csv", std::ios::app);
         m_maddpgActionsCsv.open("maddpg_actions.csv", std::ios::app);
+        m_rewardCurveCsv.open("reward_curve.csv", std::ios::app);
     }
     else
     {
-        // 새로 작성
         m_cellMetricsCsv.open("cell_metrics.csv");
         m_cellMetricsCsv << "time_s,cellId,ueCount,edgeUeCount,"
             << "cellDlThp_kbps,cellUlThp_kbps,"
             << "avgCqi,txPower_dBm,prbUtilDl" << std::endl;
 
         m_cioActionsCsv.open("cio_actions.csv");
-        m_cioActionsCsv << "episode,time_s,srcCellId,neighborCellId,cioDB,cioIE" << std::endl;
+        m_cioActionsCsv << "time_s,srcCellId,neighborCellId,cioDB,cioIE" << std::endl;
 
         m_maddpgActionsCsv.open("maddpg_actions.csv");
         m_maddpgActionsCsv << "episode,time_s,cellId,cioRawAction,txpRawAction,"
             << "cioDB,txpApplied_dBm,cellThp_kbps,epsilon" << std::endl;
+
+        m_rewardCurveCsv.open("reward_curve.csv");
+        m_rewardCurveCsv << "time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std" << std::endl;
     }
 }
 

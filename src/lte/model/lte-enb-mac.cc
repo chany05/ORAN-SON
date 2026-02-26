@@ -1117,16 +1117,22 @@ LteEnbMac::DoSchedDlConfigInd(FfMacSchedSapUser::SchedDlConfigIndParameters ind)
         rbgUsedThisSubframe |= bitmap;
     }
     m_dlRbUsed += __builtin_popcount(rbgUsedThisSubframe);
-    m_dlSubframeCount++;
+    // lte-enb-mac.cc
+    
+    m_dlSubframeCount++; 
     // PRB 카운트 블록에서
-    if (m_dlSubframeCount % 1000 == 1)
-    {
-        /*
-        std::cout << "[PRB-MAC] sf=" << m_dlSubframeCount
-            << " dataEntries=" << ind.m_buildDataList.size()
-            << " filteredRbg=" << __builtin_popcount(rbgUsedThisSubframe)
-            << std::endl;*/
-    }
+    // lte-enb-mac.cc DoSchedDlConfigInd 안에
+    // m_dlSubframeCount++ 바로 뒤에 추가
+    /*
+    if (m_dlSubframeCount % 100 == 1) {
+        std::cout << "[PRB-DEBUG]"
+                << " sf=" << m_dlSubframeCount
+                << " rbUsed=" << m_dlRbUsed
+                << " util=" << (double)m_dlRbUsed/m_dlSubframeCount/25.0
+                << " buildDataSize=" << ind.m_buildDataList.size()
+                << " rbgThisSf=" << __builtin_popcount(rbgUsedThisSubframe)
+                << std::endl;
+    }*/
 
     // Create DL PHY PDU
     Ptr<PacketBurst> pb = CreateObject<PacketBurst>();

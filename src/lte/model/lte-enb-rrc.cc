@@ -1463,45 +1463,6 @@ UeManager::RecvMeasurementReport(LteRrcSap::MeasurementReport msg)
                 }
             }
             
-            // ============================================================
-            // [추가] CQI KPM 발행 (MAC에서 실제 CQI 조회)
-            // ============================================================
-            // ============================================================
-            // [추가] CQI KPM 발행 (MAC에서 마지막 CQI 조회)
-            // ============================================================
-            {
-                auto ccIt = m_rrc->m_componentCarrierPhyConf.find(m_componentCarrierId);
-                if (ccIt != m_rrc->m_componentCarrierPhyConf.end())
-                {
-                    auto ccEnb = DynamicCast<ComponentCarrierEnb>(ccIt->second);
-                    if (ccEnb)
-                    {
-                        auto mac = ccEnb->GetMac();
-                        int cqi = mac->GetLastWbCqi(m_rnti);
-
-                        if (cqi >= 0)
-                        {
-                            Json cqiJson;
-                            cqiJson["RNTI"] = m_rnti;
-                            cqiJson["CELLID"] = m_rrc->ComponentCarrierToCellId(
-                                m_componentCarrierId);
-                            cqiJson["VALUE"] = cqi;
-                            e2ap->PublishToEndpointSubscribers(
-                                "/KPM/CARR.WBCQIDist.Bin", cqiJson);
-                            /*
-                            NS_LOG_UNCOND("[KPM] CQI - RNTI=" << m_rnti
-                                << " | CELLID="
-                                << m_rrc->ComponentCarrierToCellId(m_componentCarrierId)
-                                << " | CQI=" << cqi);
-                            */
-                        }
-                        else
-                        {
-                            NS_LOG_UNCOND("[DEBUG] No CQI yet for RNTI=" << m_rnti);
-                        }
-                    }
-                }
-            }
             
         }
     }
@@ -1749,8 +1710,45 @@ LteEnbRrc::PublishCellKpm()
                             prbJson["CELLID"] = (int64_t)cellId;
                             prbJson["PRB_UTIL"] = prbUtil;
                             e2ap->PublishToEndpointSubscribers("/KPM/RRU.PrbTotDl", prbJson);
-
+                            // 기존 PRB-DEBUG 블록 전체 제거하고,
+                            // lte-enb-rrc.cc PublishCellKpm()에서 리셋 직전에만 출력:
+                            /*if (sfCount > 0)
+                            {
+                                double prbUtil = (double)rbUsed / sfCount / 25.0;
+                                std::cout << "[PRB-PUB] Cell" << cellId
+                                        << " rbUsed=" << rbUsed
+                                        << " sfCount=" << sfCount
+                                        << " util=" << prbUtil << std::endl;
+                                // KPM publish ...
+                                //mac->ResetPrbCounters();
+                            }*/
                             mac->ResetPrbCounters();  // ★ 구간 리셋
+                        }
+                    }
+                }
+            }
+            // PublishCellKpm()의 PRB 블록 뒤에 추가
+            // ── CQI 수집 (per-RNTI, 주기적) ──
+            {
+                auto ccIt2 = m_componentCarrierPhyConf.find(0);
+                if (ccIt2 != m_componentCarrierPhyConf.end())
+                {
+                    auto ccEnb2 = DynamicCast<ComponentCarrierEnb>(ccIt2->second);
+                    if (ccEnb2)
+                    {
+                        auto mac2 = ccEnb2->GetMac();
+                        for (auto& [rnti, ueManager] : m_ueMap)
+                        {
+                            int cqi = mac2->GetLastWbCqi(rnti);
+                            if (cqi >= 0)
+                            {
+                                Json cqiJson;
+                                cqiJson["RNTI"]   = rnti;
+                                cqiJson["CELLID"] = cellId;
+                                cqiJson["VALUE"]  = cqi;
+                                e2ap->PublishToEndpointSubscribers(
+                                    "/KPM/CARR.WBCQIDist.Bin", cqiJson);
+                            }
                         }
                     }
                 }

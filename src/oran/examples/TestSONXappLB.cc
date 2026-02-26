@@ -337,11 +337,12 @@ int
 main()
 {
     RngSeedManager::SetSeed(1);
+    //RngSeedManager::SetRun(1);  // 고정값
     RngSeedManager::SetRun(static_cast<uint64_t>(std::time(nullptr)));
     GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
 
     // ── 변경 ──
-    uint16_t numberOfUes = 20;
+    uint16_t numberOfUes = 40;
     uint16_t numberOfEnbs = 3;
     uint16_t numBearersPerUe = 2;
     double enbTxPowerDbm = 32.0;
@@ -350,8 +351,8 @@ main()
     std::cout << "=== Load Balancing Test ===" << std::endl;
     std::cout << "  eNBs: " << numberOfEnbs << std::endl;
     std::cout << "  UEs: " << numberOfUes << " (all on eNB1)" << std::endl;
-    std::cout << "  SimTime: 30s" << std::endl;
-    std::cout << "  SON Period: 4s, Handover: ON" << std::endl;
+    std::cout << "  SimTime: 256s" << std::endl;
+    std::cout << "  SON Period: 1s, Handover: ON" << std::endl;
     std::cout << "==========================" << std::endl;
 
     // ── 변경: 논문 트래픽 ──
@@ -409,13 +410,17 @@ main()
     remoteHostStaticRouting->AddNetworkRouteTo(Ipv4Address("7.0.0.0"), Ipv4Mask("255.0.0.0"), 1);
 
     /*
-     * Topology:
+     * Topology: Hexagonal (equilateral triangle) layout, ISD = 500 m
      *
-     *   eNB1 (800,400)       eNB2 (1200,400)       eNB3 (1600,400)
+     *                eNB3 (500, 717)
+     *               /              \
+     *              /    coverage    \
+     *             /      area       \
+     *   eNB1 (250, 284) -------- eNB2 (750, 284)
      *
-     *   UE 12개: 전부 eNB2(1200,400) 근처에 물리적으로 배치
-     *            하지만 전부 eNB2에 강제 연결 → 과부하
-     *   → SON이 CQI 저하 감지 → eNB2/eNB3로 핸드오버 기대
+     *   Center: (500, 428)
+     *   UE: uniform random in bounding box [100, 900] x [100, 900]
+     *   Mobility bounds: [50, 950] x [50, 950]
      */
 
     NodeContainer ueNodes;
@@ -423,35 +428,33 @@ main()
     enbNodes.Create(numberOfEnbs);
     ueNodes.Create(numberOfUes);
 
-    // eNB 위치
-    // ── 변경: 논문 일직선 배치 ISD=500m ──
+    // ── 변경: eNB 정삼각형 배치, ISD = 500 m ──
+    // 삼각형 centroid = (500, 500), UE 분포 중심과 일치
     Ptr<ListPositionAllocator> enbPositionAlloc = CreateObject<ListPositionAllocator>();
-    enbPositionAlloc->Add(Vector(500.0, 500.0, 0));    // eNB1
-    enbPositionAlloc->Add(Vector(1000.0, 500.0, 0));   // eNB2
-    enbPositionAlloc->Add(Vector(1500.0, 500.0, 0));   // eNB3
+    enbPositionAlloc->Add(Vector(250.0,  356.0, 0));   // eNB1: 왼쪽 아래
+    enbPositionAlloc->Add(Vector(750.0,  356.0, 0));   // eNB2: 오른쪽 아래
+    enbPositionAlloc->Add(Vector(500.0,  789.0, 0));   // eNB3: 위 꼭짓점
     MobilityHelper enbMobility;
     enbMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     enbMobility.SetPositionAllocator(enbPositionAlloc);
     enbMobility.Install(enbNodes);
 
-
-
-    // ── 변경: 논문 UE 배치 ──
+    // ── 변경: UE 균등 분포, 삼각형 커버리지를 포함하는 사각 영역 ──
     MobilityHelper ueMobility;
     Ptr<RandomRectanglePositionAllocator> ueAllocator =
         CreateObject<RandomRectanglePositionAllocator>();
     Ptr<UniformRandomVariable> xPos = CreateObject<UniformRandomVariable>();
-    xPos->SetAttribute("Min", DoubleValue(400.0));
-    xPos->SetAttribute("Max", DoubleValue(1600.0));
+    xPos->SetAttribute("Min", DoubleValue(100.0));
+    xPos->SetAttribute("Max", DoubleValue(900.0));
     ueAllocator->SetX(xPos);
     Ptr<UniformRandomVariable> yPos = CreateObject<UniformRandomVariable>();
-    yPos->SetAttribute("Min", DoubleValue(400.0));
-    yPos->SetAttribute("Max", DoubleValue(600.0));
+    yPos->SetAttribute("Min", DoubleValue(100.0));
+    yPos->SetAttribute("Max", DoubleValue(900.0));
     ueAllocator->SetY(yPos);
 
     ueMobility.SetPositionAllocator(ueAllocator);
     ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
-        "Bounds", RectangleValue(Rectangle(300, 1700, 300, 700)),
+        "Bounds", RectangleValue(Rectangle(50, 950, 50, 950)),
         "Speed", StringValue("ns3::ConstantRandomVariable[Constant=3]"),
         "Pause", StringValue("ns3::ConstantRandomVariable[Constant=0.1]"));
     ueMobility.Install(ueNodes);
@@ -575,7 +578,10 @@ main()
 
     // SON xApp: 주기 1초, 자체 핸드오버 ON
     xAppHandoverSON sonxapp(1.0, false);
-
+    //lteHelper->EnableRlcTraces();
+    //lteHelper->EnableRlcTraces();
+    //lteHelper->EnableMacTraces();  // ← 추가    
+    //lteHelper->EnableDlPhyTraces();
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
 
@@ -600,15 +606,15 @@ main()
     Simulator::Schedule(Seconds(0.3), &E2AP::SendE2SetupRequest, &e2n3);
     //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n3);
     //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n3);
-    /*
+    
     // 수동 핸드오버 없음 — SON 자체 부하분산만
-    // UE 위치 트래커
+    /// UE 위치 트래커
     std::ofstream ueTrajCsv("ue_trajectory.csv");
     ueTrajCsv << "time_s,ueIndex,x,y,servingCellId" << std::endl;
     ueTrajCsv.close();
 
     // 0.5초마다 모든 UE 위치 기록
-    for (double t = 0.0; t < 600.0; t += 0.5)
+    for (double t = 0.0; t < 256.0; t += 0.5)
     {
         Simulator::Schedule(Seconds(t), [&ueNodes, &ueLteDevs, numberOfUes]() {
             std::ofstream csv("ue_trajectory.csv", std::ios::app);
@@ -633,13 +639,12 @@ main()
             csv.close();
         });
     }
-    */
+    
     // TestSONXappLB.cc에서 Simulator::Stop 직전에
-    Simulator::Schedule(Seconds(59.0), [&sonxapp]() {
+    Simulator::Schedule(Seconds(255.0), [&sonxapp]() {
         sonxapp.SaveModels();
     });
-    
-    Simulator::Stop(Seconds(60.0));
+    Simulator::Stop(Seconds(256.0));
     Simulator::Run();
     std::ofstream csvOutput(output_csv_filename);
     /*

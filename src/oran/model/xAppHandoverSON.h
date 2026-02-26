@@ -338,18 +338,18 @@ class xAppHandoverSON : public xAppHandover
     // 헤더에 추가
     std::map<uint16_t, double> m_prevCellDlBytes;
     std::map<uint16_t, double> m_prevCellUlBytes;
-
+    // xAppHandoverSON.h 멤버 변수에 추가
+    std::ofstream m_rewardCurveCsv;
 
     // ── MADDPG (FineBalancer 논문 사양) ──────────────
     bool m_useMADDPG = true;
-    bool m_loadPretrained = true;
-    bool m_inferenceOnly = false;
-    int m_episode = 0;
+    bool m_loadPretrained = true;   // ★ reward 변경 → 새로 학습
+    bool m_inferenceOnly = false;    // ★ 학습 모드
 
     static constexpr int    NUM_AGENTS   = 3;
     static constexpr int    OBS_DIM      = 4;       // [AvgCqi, Thp, FarUes, ServedUes]
     static constexpr int    ACT_DIM      = 2;       // [CIO, TXP]
-    static constexpr double MAX_ACTION   = 6.4999;
+    static constexpr double MAX_ACTION   = 1.0;
     static constexpr size_t BUFFER_SIZE  = 10000;
     static constexpr size_t BATCH_SIZE   = 128;
     static constexpr double GAMMA        = 0.99;
@@ -359,7 +359,7 @@ class xAppHandoverSON : public xAppHandover
     // 탐색
     double m_epsilon = 1.0;
     static constexpr double EPSILON_END   = 1e-15;
-    static constexpr double EPSILON_DECAY = 0.995;
+    static constexpr double EPSILON_DECAY = 0.999;
     static constexpr double EXPL_NOISE    = 0.1;
 
     // 에이전트 + 버퍼
@@ -371,6 +371,7 @@ class xAppHandoverSON : public xAppHandover
     std::vector<torch::Tensor> m_prevActs;
     bool m_hasPrevStep = false;
     uint64_t m_stepCount = 0;
+    double m_simStopTime = 256.0;  // 시뮬레이션 종료 시간 (done flag용)
 
     // 셀 토폴로지
     std::vector<uint16_t> m_cellIds;
