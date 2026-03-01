@@ -948,7 +948,7 @@ xAppHandoverSON::InitMADDPG()
         config.neighborCellIds = m_neighborMap[cellId];
 
         m_agents.push_back(std::make_unique<MADDPGAgent>(
-            config, totalObsDim, totalActDim, LR, MAX_ACTION));
+            config, totalObsDim, totalActDim, ACTOR_LR, CRITIC_LR, MAX_ACTION));
     }
 
     m_replayBuffer = std::make_unique<ReplayBuffer>(BUFFER_SIZE);
@@ -1114,12 +1114,13 @@ xAppHandoverSON::ComputeRewards()
               << " stdUe: " << stdUe << " stdUeNorm: " << stdUeNorm << std::endl;
 
     // 4) 최종 reward: per-cell thp - PRB 패널티 - UE 균형 패널티
-    double alpha = 2.0;   // PRB 균형 가중치
-    double beta  = 5.0;  // UE 분배 균형 가중치
+    double w_thp   = 3.0;   // THP 가중치
+    double alpha   = 2.0;   // PRB 균형 가중치
+    double beta    = 10.0;  // UE 분배 균형 가중치
     std::vector<double> rewards;
     for (size_t i = 0; i < thps.size(); i++)
     {
-        double r = thps[i] - alpha * stdPrb - beta * stdUeNorm;
+        double r = w_thp * thps[i] - alpha * stdPrb - beta * stdUeNorm;
         rewards.push_back(r);
         std::cout << " reward: " << r << std::endl;
     }
@@ -1165,16 +1166,17 @@ xAppHandoverSON::StepMADDPG()
     }
 
     // ── 이전 전이를 replay buffer에 저장 (학습 모드만) ──
+    std::vector<double> stepRewards;  // 고착화 체크에서도 사용
     if (m_hasPrevStep)
     {
-        auto rewards = ComputeRewards();
+        stepRewards = ComputeRewards();
 
         if (!m_inferenceOnly)
         {
             Experience exp;
             exp.obs = m_prevObs;
             exp.acts = m_prevActs;
-            exp.rewards = rewards;
+            exp.rewards = stepRewards;
             exp.nextObs = currentObs;
             // 시뮬레이션 종료 직전이면 done=true → target Q에서 γ×Q'(next) 제거
             double now = Simulator::Now().GetSeconds();
@@ -1185,15 +1187,15 @@ xAppHandoverSON::StepMADDPG()
         if (m_stepCount % 10 == 0)
         {
             NS_LOG_UNCOND("[MADDPG] Step=" << m_stepCount
-                << " Rewards=[" << rewards[0] << ", "
-                << rewards[1] << ", " << rewards[2] << "]"
+                << " Rewards=[" << stepRewards[0] << ", "
+                << stepRewards[1] << ", " << stepRewards[2] << "]"
                 << " BufferSize=" << m_replayBuffer->Size()
                 << " Epsilon=" << m_epsilon);
 
 
             // NS_LOG_UNCOND 대신 std::cout 사용!
             std::cout << "🚀 [MADDPG] Step=" << m_stepCount
-                    << " | Reward=" << rewards[0] << ", " << rewards[1] << ", " << rewards[2]
+                    << " | Reward=" << stepRewards[0] << ", " << stepRewards[1] << ", " << stepRewards[2]
                     << " | BufferSize=" << m_replayBuffer->Size() << std::endl;
 
         }
@@ -1331,6 +1333,12 @@ xAppHandoverSON::StepMADDPG()
         }
     }
 
+    // ── 고착화 체크 (이전 reward와 현재 action 비교) ──
+    if (!stepRewards.empty())
+    {
+        CheckAndLogStagnation(currentActs, stepRewards);
+    }
+
     // ── epsilon 감소 (학습 모드만) ──
     if (!m_inferenceOnly && m_epsilon > EPSILON_END)
     {
@@ -1464,13 +1472,37 @@ xAppHandoverSON::TrainMADDPG()
 
         if (m_stepCount % 10 == 0)
         {
+            float curActorLoss  = actorLoss.item<float>();
+            float curCriticLoss = criticLoss.item<float>();
             NS_LOG_UNCOND("[MADDPG] Train Agent=" << i
-                << " CriticLoss=" << criticLoss.item<float>()
-                << " ActorLoss=" << actorLoss.item<float>());
-            std::cout << "🔥 [MADDPG Train] Step=" << m_stepCount
+                << " CriticLoss=" << curCriticLoss
+                << " ActorLoss=" << curActorLoss);
+
+            static float prevActorLoss[NUM_AGENTS] = {0.f, 0.f, 0.f};
+            float actorLossDelta = curActorLoss - prevActorLoss[i];
+            prevActorLoss[i] = curActorLoss;
+
+            auto actStd = policyActs[i].detach().std(0);
+            float actStdMean = actStd.mean().item<float>();
+
+            auto qValues = currentQ.detach();
+            float qMean = qValues.mean().item<float>();
+            float qStd  = qValues.std().item<float>();
+
+            auto actVar = policyActs[i].detach().var(0);
+            auto perDimEntropy = 0.5 * torch::log(2.0 * M_PI * M_E * (actVar + 1e-8));
+            float entropy = perDimEntropy.sum().item<float>();
+
+            std::cout << "[MADDPG Train] Step=" << m_stepCount
                       << " | Agent=" << i
-                      << " | CriticLoss=" << criticLoss.item<float>()
-                      << " | ActorLoss=" << actorLoss.item<float>() << std::endl;
+                      << " | CriticLoss=" << curCriticLoss
+                      << " | ActorLoss=" << curActorLoss
+                      << " | ActorLossDelta=" << actorLossDelta
+                      << " | ActionStd=" << actStdMean
+                      << " | Q_mean=" << qMean
+                      << " | Q_std=" << qStd
+                      << " | ActionEntropy=" << entropy
+                      << std::endl;
         }
     }
 }
@@ -1583,6 +1615,7 @@ xAppHandoverSON::InitCsvLoggers()
         m_cioActionsCsv.open("cio_actions.csv", std::ios::app);
         m_maddpgActionsCsv.open("maddpg_actions.csv", std::ios::app);
         m_rewardCurveCsv.open("reward_curve.csv", std::ios::app);
+        m_stagnationCsv.open("stagnation_check.csv", std::ios::app);
     }
     else
     {
@@ -1609,6 +1642,16 @@ xAppHandoverSON::InitCsvLoggers()
 
         m_rewardCurveCsv.open("reward_curve.csv");
         m_rewardCurveCsv << "time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std" << std::endl;
+
+        m_stagnationCsv.open("stagnation_check.csv");
+        m_stagnationCsv << "time_s,step,cellId,"
+            << "cio_l2_change,max_cio_change,"
+            << "txp_raw_curr,txp_raw_prev,txp_raw_change,"
+            << "txp_dBm_curr,txp_dBm_prev,"
+            << "ue_count_prev,ue_count_curr,ue_count_change,"
+            << "reward_prev,reward_curr,reward_change,"
+            << "consecutive_stagnant_steps,"
+            << "cio_stagnant,txp_stagnant,is_stagnant" << std::endl;
     }
 }
 
@@ -1641,5 +1684,142 @@ xAppHandoverSON::LogCellMetrics()
             << avgCqi << ","
             << cell.txPower << ","
             << cell.prbUtilDl << std::endl;
+    }
+}
+
+// =============================================================================
+// 고착화(Stagnation) 체크 및 CSV 로깅
+// =============================================================================
+// 매 스텝마다 에이전트별로:
+//   1) CIO 변화량: 이전 CIO raw action과의 L2 norm (TXP 제외)
+//   2) TXP 변화량: TXP raw action 변화 (마지막 차원, 단독 추적)
+//   3) TXP 실제 적용값: raw → dBm 변환값
+//   4) UE 분포 변화량, Reward 변화량
+//   5) 연속 고착 스텝: CIO/TXP 각각 독립 추적
+void
+xAppHandoverSON::CheckAndLogStagnation(
+    const std::vector<torch::Tensor>& currentActs,
+    const std::vector<double>& rewards)
+{
+    if (!m_stagnationCsv.is_open()) return;
+
+    double now = Simulator::Now().GetSeconds();
+    bool allStagnant = true;
+
+    for (size_t i = 0; i < m_agents.size(); i++)
+    {
+        uint16_t cellId = m_agents[i]->GetConfig().cellId;
+        auto actData = currentActs[i].accessor<float, 1>();
+        int64_t actDim = currentActs[i].size(0);
+        const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
+        int64_t cioEndIdx = static_cast<int64_t>(neighbors.size());  // TXP는 마지막
+
+        // 현재 action을 vector로 변환
+        std::vector<float> currAct(actDim);
+        for (int64_t d = 0; d < actDim; d++)
+            currAct[d] = actData[d];
+
+        // 현재 TXP raw 및 적용값
+        float txpRaw = currAct[cioEndIdx];
+        double txpApplied = m_txPower + static_cast<double>(txpRaw) * 4.0;
+        txpApplied = std::max(26.0, std::min(38.0, txpApplied));
+
+        // --- CIO / TXP 변화량 분리 계산 ---
+        double cioL2Change = -1.0;
+        double maxCioChange = -1.0;
+        double txpRawChange = -1.0;
+        float prevTxpRaw = txpRaw;
+
+        auto prevIt = m_prevRawActions.find(cellId);
+        if (prevIt != m_prevRawActions.end() && (int64_t)prevIt->second.size() == actDim)
+        {
+            // CIO 차원만 (0 ~ cioEndIdx-1)
+            cioL2Change = 0.0;
+            maxCioChange = 0.0;
+            for (int64_t d = 0; d < cioEndIdx; d++)
+            {
+                double diff = std::abs(currAct[d] - prevIt->second[d]);
+                cioL2Change += diff * diff;
+                maxCioChange = std::max(maxCioChange, diff);
+            }
+            cioL2Change = std::sqrt(cioL2Change);
+
+            // TXP 차원 (마지막)
+            prevTxpRaw = prevIt->second[cioEndIdx];
+            txpRawChange = std::abs(txpRaw - prevTxpRaw);
+        }
+
+        // TXP 이전 적용값
+        double prevTxpApplied = m_txPower + static_cast<double>(prevTxpRaw) * 4.0;
+        prevTxpApplied = std::max(26.0, std::min(38.0, prevTxpApplied));
+
+        // --- UE 분포 변화량 ---
+        uint32_t ueCountCurr = 0;
+        auto cellIt = m_cellContexts.find(cellId);
+        if (cellIt != m_cellContexts.end())
+            ueCountCurr = cellIt->second.ueCount;
+
+        int ueCountChange = 0;
+        uint32_t ueCountPrev = ueCountCurr;
+        auto uePrevIt = m_prevUeCounts.find(cellId);
+        if (uePrevIt != m_prevUeCounts.end())
+        {
+            ueCountPrev = uePrevIt->second;
+            ueCountChange = static_cast<int>(ueCountCurr) - static_cast<int>(ueCountPrev);
+        }
+
+        // --- Reward 변화량 ---
+        double rewardCurr = (i < rewards.size()) ? rewards[i] : 0.0;
+        double rewardPrev = rewardCurr;
+        double rewardChange = 0.0;
+        if (i < m_prevRewards.size())
+        {
+            rewardPrev = m_prevRewards[i];
+            rewardChange = std::abs(rewardCurr - rewardPrev);
+        }
+
+        // --- 고착 판정 (CIO, TXP 독립) ---
+        bool cioStagnant = false;
+        bool txpStagnant = false;
+        if (cioL2Change >= 0.0)
+        {
+            cioStagnant = (cioL2Change < STAGNATION_ACTION_THRESH);
+            txpStagnant = (txpRawChange < STAGNATION_ACTION_THRESH);
+        }
+        bool isStagnant = cioStagnant && txpStagnant
+                       && (rewardChange < STAGNATION_REWARD_THRESH);
+        if (!isStagnant) allStagnant = false;
+
+        // --- CSV 기록 ---
+        m_stagnationCsv << now << "," << m_stepCount << "," << cellId << ","
+            << cioL2Change << "," << maxCioChange << ","
+            << txpRaw << "," << prevTxpRaw << "," << txpRawChange << ","
+            << txpApplied << "," << prevTxpApplied << ","
+            << ueCountPrev << "," << ueCountCurr << "," << ueCountChange << ","
+            << rewardPrev << "," << rewardCurr << "," << rewardChange << ","
+            << m_stagnantSteps << ","
+            << (cioStagnant ? 1 : 0) << ","
+            << (txpStagnant ? 1 : 0) << ","
+            << (isStagnant ? 1 : 0) << std::endl;
+
+        // 이전 값 갱신
+        m_prevRawActions[cellId] = currAct;
+        m_prevUeCounts[cellId] = ueCountCurr;
+    }
+
+    // 전체 에이전트가 고착이면 카운터 증가, 아니면 리셋
+    if (allStagnant && !m_prevRewards.empty())
+        m_stagnantSteps++;
+    else
+        m_stagnantSteps = 0;
+
+    // 이전 reward 갱신
+    m_prevRewards = rewards;
+
+    // 콘솔 경고: 연속 고착이 길어지면 알림
+    if (m_stagnantSteps >= 10 && m_stagnantSteps % 10 == 0)
+    {
+        NS_LOG_UNCOND("[STAGNATION] WARNING: " << m_stagnantSteps
+            << " consecutive stagnant steps detected at t=" << now << "s");
     }
 }

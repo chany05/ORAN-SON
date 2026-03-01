@@ -88,6 +88,15 @@ build_lib_example(
         ${liboran}
         ${libapplications}
 )
+build_lib_example(
+        NAME TestTxpCqiVerify
+        SOURCE_FILES TestTxpCqiVerify.cc
+        LIBRARIES_TO_LINK
+        ${libcore}
+        ${libmobility}
+        ${liblte}
+        ${liboran}
+)
 if(NOT(${ARMADILLO} STREQUAL ARMADILLO-NOTFOUND) AND NOT(${MLPACK} STREQUAL MLPACK-NOTFOUND))
     build_lib_example(
             NAME TestHandoverXappMLPACK

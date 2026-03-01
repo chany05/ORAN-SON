@@ -356,9 +356,9 @@ main()
     std::cout << "==========================" << std::endl;
 
     // ── 변경: 논문 트래픽 ──
-    Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(10)));
-    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(512));
-    Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(1000000));
+    Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(20)));
+    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(2048));
+    Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(0));
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
     Config::SetDefault("ns3::LteEnbRrc::SrsPeriodicity", UintegerValue(80));
@@ -371,7 +371,7 @@ main()
 
     // ── 변경: 스케줄러, 경로손실, 대역폭 ──
     lteHelper->SetSchedulerType("ns3::PfFfMacScheduler");
-    lteHelper->SetAttribute("PathlossModel", StringValue("ns3::FriisPropagationLossModel"));
+    lteHelper->SetAttribute("PathlossModel", StringValue("ns3::FriisSpectrumPropagationLossModel"));
     lteHelper->SetSpectrumChannelType("ns3::MultiModelSpectrumChannel");
     lteHelper->SetEnbAntennaModelType("ns3::IsotropicAntennaModel");
     lteHelper->SetEnbDeviceAttribute("DlEarfcn", UintegerValue(100));

@@ -1123,8 +1123,8 @@ LteEnbMac::DoSchedDlConfigInd(FfMacSchedSapUser::SchedDlConfigIndParameters ind)
     // PRB 카운트 블록에서
     // lte-enb-mac.cc DoSchedDlConfigInd 안에
     // m_dlSubframeCount++ 바로 뒤에 추가
-    /*
-    if (m_dlSubframeCount % 100 == 1) {
+    /*/
+    if (m_dlSubframeCount % 50 == 1) {
         std::cout << "[PRB-DEBUG]"
                 << " sf=" << m_dlSubframeCount
                 << " rbUsed=" << m_dlRbUsed
