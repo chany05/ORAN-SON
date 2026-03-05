@@ -466,7 +466,7 @@ main(int argc, char* argv[])
     Simulator::Schedule(Seconds(0.3), &E2AP::SendE2SetupRequest, &e2n3);
 
     // UE 위치 트래커
-    std::ofstream ueTrajCsv("ue_trajectory.csv");
+    /*std::ofstream ueTrajCsv("ue_trajectory.csv");
     ueTrajCsv << "time_s,ueIndex,x,y,servingCellId" << std::endl;
     ueTrajCsv.close();
 
@@ -488,7 +488,7 @@ main(int argc, char* argv[])
             }
             csv.close();
         });
-    }
+    }*/
 
     Simulator::Schedule(Seconds(simTime - 1.0), [&sonxapp]() {
         sonxapp.SaveModels();

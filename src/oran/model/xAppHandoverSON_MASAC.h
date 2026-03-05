@@ -381,10 +381,19 @@ class xAppHandoverSON_MASAC : public xAppHandover
     static constexpr double TAU_SOFT     = 0.005;
     static constexpr double ACTOR_LR     = 1e-4;
     static constexpr double CRITIC_LR    = 3e-4;
+    static constexpr int    N_STEP       = 3;
 
     // 에이전트 + 버퍼
     std::vector<std::unique_ptr<MASACAgent>> m_agents;
     std::unique_ptr<ReplayBuffer_MASAC> m_replayBuffer;
+
+    // n-step transition buffer
+    struct NStepTransition {
+        std::vector<torch::Tensor> obs;
+        std::vector<torch::Tensor> acts;
+        std::vector<double> rewards;  // per-agent reward at this step
+    };
+    std::deque<NStepTransition> m_nStepBuffer;
 
     // 이전 스텝 저장
     std::vector<torch::Tensor> m_prevObs;
