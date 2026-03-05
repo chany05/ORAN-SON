@@ -40,6 +40,7 @@ build_lib(
     model/xAppHandoverMlpackKmeans.cc
     model/xAppHandoverMaxRsrq.cc
     model/xAppHandoverSON.cc
+    model/xAppHandoverSON_MASAC.cc
   HEADER_FILES
     model/json.hpp
     model/PubSubInfra.h
@@ -53,6 +54,7 @@ build_lib(
     model/xAppHandoverMlpackKmeans.h
     model/xAppHandoverMaxRsrq.h
     model/xAppHandoverSON.h
+    model/xAppHandoverSON_MASAC.h
   LIBRARIES_TO_LINK
     ${libcore}
     ${libnetwork}

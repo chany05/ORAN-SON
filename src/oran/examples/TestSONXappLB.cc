@@ -607,7 +607,7 @@ main()
     //Simulator::Schedule(Seconds(2.0), &E2AP::RegisterDefaultEndpoints, &e2n3);
     //Simulator::Schedule(Seconds(2.5), &E2AP::SubscribeToDefaultEndpoints, &e2t, e2n3);
     
-    // 수동 핸드오버 없음 — SON 자체 부하분산만
+    /*// 수동 핸드오버 없음 — SON 자체 부하분산만
     // UE 위치 트래커
     std::ofstream ueTrajCsv("ue_trajectory.csv");
     ueTrajCsv << "time_s,ueIndex,x,y,servingCellId" << std::endl;
@@ -638,7 +638,7 @@ main()
             }
             csv.close();
         });
-    }
+    }*/
     
     // TestSONXappLB.cc에서 Simulator::Stop 직전에
     Simulator::Schedule(Seconds(255.0), [&sonxapp]() {
