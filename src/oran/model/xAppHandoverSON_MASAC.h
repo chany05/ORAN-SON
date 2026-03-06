@@ -50,10 +50,10 @@ struct SACActorNetImpl : torch::nn::Module
 {
     SACActorNetImpl(int64_t obsDim, int64_t actDim)
     {
-        fc1 = register_module("fc1", torch::nn::Linear(obsDim, 128));
-        fc2 = register_module("fc2", torch::nn::Linear(128, 128));
-        fc_mean   = register_module("fc_mean",   torch::nn::Linear(128, actDim));
-        fc_logstd = register_module("fc_logstd", torch::nn::Linear(128, actDim));
+        fc1 = register_module("fc1", torch::nn::Linear(obsDim, 64));
+        fc2 = register_module("fc2", torch::nn::Linear(64, 64));
+        fc_mean   = register_module("fc_mean",   torch::nn::Linear(64, actDim));
+        fc_logstd = register_module("fc_logstd", torch::nn::Linear(64, actDim));
     }
 
     // Stochastic: reparameterization trick a = tanh(μ + σ*ε)
@@ -71,8 +71,9 @@ struct SACActorNetImpl : torch::nn::Module
 
         // log_prob with Jacobian correction for tanh squashing
         auto log_prob = -0.5 * (std::log(2.0 * M_PI) + 2.0 * log_std + eps * eps)
-                       - torch::log(1.0 - action * action + 1e-6);
+                       - torch::log(1.0 - action * action + 1e-3);
         log_prob = log_prob.sum(-1, /*keepdim=*/true);
+        log_prob = torch::clamp(log_prob, -20.0, 2.0);
 
         return {action, log_prob};
     }
@@ -97,13 +98,13 @@ struct TwinCriticNetImpl : torch::nn::Module
 {
     TwinCriticNetImpl(int64_t totalStateDim, int64_t totalActDim)
     {
-        q1_fc1 = register_module("q1_fc1", torch::nn::Linear(totalStateDim + totalActDim, 128));
-        q1_fc2 = register_module("q1_fc2", torch::nn::Linear(128, 128));
-        q1_fc3 = register_module("q1_fc3", torch::nn::Linear(128, 1));
+        q1_fc1 = register_module("q1_fc1", torch::nn::Linear(totalStateDim + totalActDim, 64));
+        q1_fc2 = register_module("q1_fc2", torch::nn::Linear(64, 64));
+        q1_fc3 = register_module("q1_fc3", torch::nn::Linear(64, 1));
 
-        q2_fc1 = register_module("q2_fc1", torch::nn::Linear(totalStateDim + totalActDim, 128));
-        q2_fc2 = register_module("q2_fc2", torch::nn::Linear(128, 128));
-        q2_fc3 = register_module("q2_fc3", torch::nn::Linear(128, 1));
+        q2_fc1 = register_module("q2_fc1", torch::nn::Linear(totalStateDim + totalActDim, 64));
+        q2_fc2 = register_module("q2_fc2", torch::nn::Linear(64, 64));
+        q2_fc3 = register_module("q2_fc3", torch::nn::Linear(64, 1));
     }
 
     std::pair<torch::Tensor, torch::Tensor> forward(torch::Tensor state, torch::Tensor action)
@@ -375,8 +376,8 @@ class xAppHandoverSON_MASAC : public xAppHandover
     static constexpr int    NUM_AGENTS   = 3;
     static constexpr int    OBS_DIM      = 4;
     static constexpr double MAX_ACTION   = 1.0;
-    static constexpr size_t BUFFER_SIZE  = 10000;
-    static constexpr size_t BATCH_SIZE   = 128;
+    static constexpr size_t BUFFER_SIZE  = 2000;
+    static constexpr size_t BATCH_SIZE   = 64;
     static constexpr double GAMMA        = 0.99;
     static constexpr double TAU_SOFT     = 0.005;
     static constexpr double ACTOR_LR     = 1e-4;
@@ -406,6 +407,20 @@ class xAppHandoverSON_MASAC : public xAppHandover
     std::vector<uint16_t> m_cellIds;
     std::map<uint16_t, std::vector<uint16_t>> m_neighborMap;
     uint32_t m_totalUEs = 40;
+
+    // EMA smoothing for noisy cell metrics
+    static constexpr double EMA_ALPHA = 0.3;  // 0.3 = 30% new, 70% old
+    struct SmoothedCellMetrics {
+        double ueCount = 0.0;
+        double edgeUeCount = 0.0;
+        double dlThp = 0.0;
+        double ulThp = 0.0;
+        bool initialized = false;
+    };
+    std::map<uint16_t, SmoothedCellMetrics> m_smoothed;
+
+    // Per-cell CIO (global): effective CIO(src→dst) = CIO_dst - CIO_src
+    std::map<uint16_t, int> m_cellCio;
 
     // MASAC 함수
     void InitMASAC();

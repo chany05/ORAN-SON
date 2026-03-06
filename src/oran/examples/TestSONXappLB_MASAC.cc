@@ -341,7 +341,7 @@ main(int argc, char* argv[])
 
     ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
         "Bounds", RectangleValue(Rectangle(50, 950, 50, 950)),
-        "Speed", StringValue("ns3::ConstantRandomVariable[Constant=3]"),
+        "Speed", StringValue("ns3::ConstantRandomVariable[Constant=1]"),
         "Pause", StringValue("ns3::ConstantRandomVariable[Constant=0.1]"));
     ueMobility.Install(ueNodes);
 

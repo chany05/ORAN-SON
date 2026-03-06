@@ -61,7 +61,29 @@ xAppHandoverSON_MASAC::PeriodicSONCheck()
     NS_LOG_FUNCTION(this);
 
     CollectKPMs();
-    if (m_stepCount % 1 == 0)
+
+    // EMA smoothing of cell metrics
+    for (auto& [cellId, cell] : m_cellContexts)
+    {
+        auto& s = m_smoothed[cellId];
+        if (!s.initialized)
+        {
+            s.ueCount = cell.ueCount;
+            s.edgeUeCount = cell.edgeUeCount;
+            s.dlThp = cell.totalThroughputDl;
+            s.ulThp = cell.totalThroughputUl;
+            s.initialized = true;
+        }
+        else
+        {
+            s.ueCount     = EMA_ALPHA * cell.ueCount     + (1.0 - EMA_ALPHA) * s.ueCount;
+            s.edgeUeCount = EMA_ALPHA * cell.edgeUeCount + (1.0 - EMA_ALPHA) * s.edgeUeCount;
+            s.dlThp       = EMA_ALPHA * cell.totalThroughputDl + (1.0 - EMA_ALPHA) * s.dlThp;
+            s.ulThp       = EMA_ALPHA * cell.totalThroughputUl + (1.0 - EMA_ALPHA) * s.ulThp;
+        }
+    }
+
+    if (m_stepCount % 5 == 0)
     {
         LogCellMetrics();
     }
@@ -599,18 +621,14 @@ xAppHandoverSON_MASAC::InitMASAC()
     m_neighborMap[3] = {1, 2};
 
     int64_t totalObsDim = NUM_AGENTS * OBS_DIM;
-    int64_t totalActDim = 0;
-    for (auto cellId : m_cellIds)
-    {
-        totalActDim += static_cast<int64_t>(m_neighborMap[cellId].size()) + 1;
-    }
+    int64_t totalActDim = NUM_AGENTS * 2;  // each agent: [CIO_self, TXP]
 
     for (auto cellId : m_cellIds)
     {
         AgentConfig_MASAC config;
         config.cellId = cellId;
         config.obsDim = OBS_DIM;
-        config.actDim = static_cast<int64_t>(m_neighborMap[cellId].size()) + 1;
+        config.actDim = 2;  // [CIO_self, TXP]
         config.neighborCellIds = m_neighborMap[cellId];
 
         m_agents.push_back(std::make_unique<MASACAgent>(
@@ -673,58 +691,74 @@ xAppHandoverSON_MASAC::BuildObservation(uint16_t cellId)
 std::vector<double>
 xAppHandoverSON_MASAC::ComputeRewards()
 {
+    // EMA-smoothed values for thp, ueCount; raw prbUtil
     std::vector<double> thps;
+    std::vector<double> prbUtils;
+    std::vector<double> ueCounts;
+    double totalUEs = 0.0;
+    thps.reserve(m_cellIds.size());
+    prbUtils.reserve(m_cellIds.size());
+    ueCounts.reserve(m_cellIds.size());
+
     for (auto cellId : m_cellIds)
     {
-        auto it = m_cellContexts.find(cellId);
-        double thp = 0.0;
-        if (it != m_cellContexts.end())
+        auto sit = m_smoothed.find(cellId);
+        auto cit = m_cellContexts.find(cellId);
+        if (sit != m_smoothed.end() && sit->second.initialized)
         {
-            thp = (it->second.totalThroughputDl + it->second.totalThroughputUl)
-                / 1e3 / 30.0;
+            thps.push_back((sit->second.dlThp + sit->second.ulThp) / 1e3 / 30.0);
+            ueCounts.push_back(sit->second.ueCount);
+            totalUEs += sit->second.ueCount;
         }
-        thps.push_back(thp);
+        else
+        {
+            thps.push_back(0.0);
+            ueCounts.push_back(0.0);
+        }
+        prbUtils.push_back(cit != m_cellContexts.end() ? cit->second.prbUtilDl : 0.0);
     }
 
-    std::vector<double> prbUtils;
-    for (auto cellId : m_cellIds)
-    {
-        auto it = m_cellContexts.find(cellId);
-        prbUtils.push_back(it != m_cellContexts.end() ? it->second.prbUtilDl : 0.0);
-    }
     double meanPrb = std::accumulate(prbUtils.begin(), prbUtils.end(), 0.0) / prbUtils.size();
     double prbVar = 0.0;
     for (double p : prbUtils) prbVar += (p - meanPrb) * (p - meanPrb);
     double stdPrb = std::sqrt(prbVar / prbUtils.size());
-
-    std::vector<double> ueCounts;
-    double totalUEs = 0.0;
-    for (auto cellId : m_cellIds)
-    {
-        auto it = m_cellContexts.find(cellId);
-        double ue = (it != m_cellContexts.end()) ? (double)it->second.ueCount : 0.0;
-        ueCounts.push_back(ue);
-        totalUEs += ue;
-    }
     double meanUe = totalUEs / ueCounts.size();
     double ueVar = 0.0;
     for (double u : ueCounts) ueVar += (u - meanUe) * (u - meanUe);
     double stdUe = std::sqrt(ueVar / ueCounts.size());
     double stdUeNorm = (totalUEs > 0) ? stdUe / totalUEs : 0.0;
 
-    double w_thp   = 3.0;
-    double alpha   = 2.0;
-    double w_load  = 50.0;
+    // Edge UE ratio per cell (smoothed)
+    std::vector<double> edgeRatios;
+    for (auto cellId : m_cellIds)
+    {
+        auto sit = m_smoothed.find(cellId);
+        if (sit != m_smoothed.end() && sit->second.ueCount > 0.5)
+            edgeRatios.push_back(sit->second.edgeUeCount / sit->second.ueCount);
+        else
+            edgeRatios.push_back(0.0);
+    }
+    double meanEdge = std::accumulate(edgeRatios.begin(), edgeRatios.end(), 0.0) / edgeRatios.size();
+    double edgeVar = 0.0;
+    for (double e : edgeRatios) edgeVar += (e - meanEdge) * (e - meanEdge);
+    double stdEdgeRatio = std::sqrt(edgeVar / edgeRatios.size());
+
+    double w_thp       = 10.0;
+    double alpha       = 2.0;
+    double w_load      = 15.0;
+    double w_edge_std  = 5.0;
     double fairShare = 1.0 / static_cast<double>(ueCounts.size());
 
     std::vector<double> rewards;
     for (size_t i = 0; i < thps.size(); i++)
     {
-        // per-UE throughput: overloaded cell gets lower thp reward
         double perUeThp = (ueCounts[i] > 0) ? thps[i] / ueCounts[i] : 0.0;
         double ueShare = (totalUEs > 0) ? ueCounts[i] / totalUEs : fairShare;
         double loadDev = ueShare - fairShare;
-        double r = w_thp * perUeThp - alpha * stdPrb - w_load * loadDev * loadDev;
+        double r = w_thp * perUeThp
+                 - w_edge_std * stdEdgeRatio
+                 - alpha * stdPrb
+                 - w_load * loadDev * loadDev;
         rewards.push_back(r);
     }
 
@@ -734,7 +768,7 @@ xAppHandoverSON_MASAC::ComputeRewards()
         m_rewardCurveCsv << now << "," << m_stepCount;
         for (size_t i = 0; i < rewards.size(); i++)
             m_rewardCurveCsv << "," << rewards[i];
-        m_rewardCurveCsv << "," << stdPrb << "," << stdUeNorm << std::endl;
+        m_rewardCurveCsv << "," << stdPrb << "," << stdUeNorm << "\n";
     }
 
     return rewards;
@@ -748,11 +782,49 @@ xAppHandoverSON_MASAC::StepMASAC()
 {
     NS_LOG_FUNCTION(this);
 
-    // ── 현재 관측 수집 ──
+    // ── 현재 관측 수집 (1회 순회로 모든 셀 obs 동시 계산) ──
     std::vector<torch::Tensor> currentObs;
-    for (size_t i = 0; i < m_agents.size(); i++)
     {
-        currentObs.push_back(BuildObservation(m_agents[i]->GetConfig().cellId));
+        // 셀별 집계를 위한 임시 구조체
+        struct CellObs { float sumCqi = 0; uint32_t cqiCount = 0; uint32_t edgeCount = 0; uint32_t ueWithData = 0; };
+        std::map<uint16_t, CellObs> cellObsMap;
+        for (auto cellId : m_cellIds) cellObsMap[cellId] = {};
+
+        // 1회 순회로 모든 셀의 UE 통계 수집
+        for (auto& [key, ue] : m_ueContexts)
+        {
+            auto it = cellObsMap.find(ue.servingCellId);
+            if (it != cellObsMap.end())
+            {
+                it->second.ueWithData++;
+                it->second.sumCqi += ue.cqi;
+                it->second.cqiCount++;
+                if (ue.isEdge) it->second.edgeCount++;
+            }
+        }
+
+        uint32_t totalUEs = m_ueContexts.size();
+        for (size_t i = 0; i < m_agents.size(); i++)
+        {
+            uint16_t cellId = m_agents[i]->GetConfig().cellId;
+            std::vector<float> obs(OBS_DIM, 0.0f);
+            auto cellIt = m_cellContexts.find(cellId);
+            if (cellIt == m_cellContexts.end())
+            {
+                currentObs.push_back(torch::zeros({OBS_DIM}));
+                continue;
+            }
+            const auto& co = cellObsMap[cellId];
+            const auto& sm = m_smoothed[cellId];
+            float avgCqi = (co.cqiCount > 0) ? co.sumCqi / co.cqiCount : 0.0f;
+            double smoothTotal = 0.0;
+            for (auto& [cid, s] : m_smoothed) smoothTotal += s.ueCount;
+            obs[0] = avgCqi / 15.0f;
+            obs[1] = static_cast<float>(sm.dlThp / 1e3) / 30.0f;
+            obs[2] = (sm.ueCount > 0.5) ? static_cast<float>(sm.edgeUeCount / sm.ueCount) : 0.0f;
+            obs[3] = (smoothTotal > 0.5) ? static_cast<float>(sm.ueCount / smoothTotal) : 0.0f;
+            currentObs.push_back(torch::from_blob(obs.data(), {OBS_DIM}, torch::kFloat32).clone());
+        }
     }
 
     // ── 이전 전이를 n-step buffer에 저장 후 replay buffer로 flush ──
@@ -866,79 +938,67 @@ xAppHandoverSON_MASAC::StepMASAC()
 
         auto actData = act.accessor<float, 1>();
         const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
-        int txpIdx = static_cast<int>(neighbors.size());
 
-        // ── per-neighbor CIO 변환 ──
-        Json cioList = Json::array();
-        for (size_t n = 0; n < neighbors.size(); n++)
-        {
-            int cioDB = static_cast<int>(std::round(actData[n] * 5.0));
-            cioDB = std::max(-5, std::min(5, cioDB));
-            int cioIE = cioDB * 2;
+        // ── Per-cell CIO: action[0] = self CIO, action[1] = TXP ──
+        int selfCioDB = std::max(-5, std::min(5,
+            static_cast<int>(std::round(actData[0] * 5.0))));
+        m_cellCio[srcCell] = selfCioDB;
 
-            Json entry;
-            entry["CELL_ID"] = neighbors[n];
-            entry["CIO_VALUE"] = cioIE;
-            cioList.push_back(entry);
-        }
         std::string endpoint = "/E2Node/" + std::to_string(srcCell) + "/";
-        ric->E2SmRcSendCioControlRequest(cioList, endpoint);
-
-        // ── TXP 변환 ──
-        double txpOffset = static_cast<double>(actData[txpIdx]) * 4.0;
-        double txpApplied = m_txPower + txpOffset;
-        txpApplied = std::max(26.0, std::min(38.0, txpApplied));
+        double txpOffset = static_cast<double>(actData[1]) * 4.0;
+        double txpApplied = std::max(26.0, std::min(38.0, m_txPower + txpOffset));
         ric->E2SmRcSendTxPowerControlRequest(txpApplied, endpoint);
 
         // ── 콘솔 로그 ──
         std::cout << "[ACT-MASAC] Step=" << m_stepCount
-            << " Cell" << srcCell << " CIO=[";
-        for (size_t n = 0; n < neighbors.size(); n++)
-        {
-            int cioDB = static_cast<int>(std::round(actData[n] * 5.0));
-            cioDB = std::max(-5, std::min(5, cioDB));
-            std::cout << " " << neighbors[n] << ":" << cioDB << "dB";
-            if (n + 1 < neighbors.size()) std::cout << ", ";
-        }
-        std::cout << "] TXP=" << txpApplied << "dBm raw=[";
-        for (int64_t d = 0; d < agentActDim; d++)
-        {
-            std::cout << actData[d];
-            if (d + 1 < agentActDim) std::cout << ",";
-        }
-        std::cout << "]" << std::endl;
+            << " Cell" << srcCell << " selfCIO=" << selfCioDB
+            << "dB TXP=" << txpApplied << "dBm raw=["
+            << actData[0] << "," << actData[1] << "]" << std::endl;
 
-        // ── CSV logging ──
+        // ── CSV logging (every 5 steps) ──
+        if (m_stepCount % 5 == 0)
         {
             double now = Simulator::Now().GetSeconds();
-            for (size_t n = 0; n < neighbors.size(); n++)
-            {
-                int cioDB = static_cast<int>(std::round(actData[n] * 5.0));
-                cioDB = std::max(-5, std::min(5, cioDB));
-                int cioIE = cioDB * 2;
-                m_cioActionsCsv << now << ","
-                    << srcCell << "," << neighbors[n] << ","
-                    << cioDB << "," << cioIE << std::endl;
-            }
-
             double cellThp = 0.0;
             auto cellIt = m_cellContexts.find(srcCell);
             if (cellIt != m_cellContexts.end())
                 cellThp = cellIt->second.totalThroughputDl + cellIt->second.totalThroughputUl;
 
             double alpha_val = m_agents[i]->GetLogAlpha().exp().item<double>();
-            m_maddpgActionsCsv << now << "," << srcCell;
-            for (int64_t d = 0; d < agentActDim; d++)
-                m_maddpgActionsCsv << "," << actData[d];
-            for (size_t n = 0; n < neighbors.size(); n++)
-            {
-                int cioDB = static_cast<int>(std::round(actData[n] * 5.0));
-                cioDB = std::max(-5, std::min(5, cioDB));
-                m_maddpgActionsCsv << "," << cioDB;
-            }
-            m_maddpgActionsCsv << "," << txpApplied
-                << "," << cellThp << "," << alpha_val << std::endl;
+            m_maddpgActionsCsv << now << "," << srcCell
+                << "," << actData[0] << "," << actData[1]
+                << "," << selfCioDB << "," << txpApplied
+                << "," << cellThp << "," << alpha_val << "\n";
         }
+    }
+
+    // ── Apply effective CIO: CIO(src→dst) = CIO_dst - CIO_src ──
+    for (auto srcCellId : m_cellIds)
+    {
+        auto nit = m_neighborMap.find(srcCellId);
+        if (nit == m_neighborMap.end()) continue;
+        Json cioList = Json::array();
+        int srcCio = m_cellCio.count(srcCellId) ? m_cellCio[srcCellId] : 0;
+        for (auto dstCellId : nit->second)
+        {
+            int dstCio = m_cellCio.count(dstCellId) ? m_cellCio[dstCellId] : 0;
+            int effectiveCio = std::max(-5, std::min(5, dstCio - srcCio));
+            Json entry;
+            entry["CELL_ID"] = dstCellId;
+            entry["CIO_VALUE"] = effectiveCio * 2;  // IE units
+            cioList.push_back(entry);
+
+            // CSV logging
+            if (m_stepCount % 5 == 0 && m_cioActionsCsv.is_open())
+            {
+                double now = Simulator::Now().GetSeconds();
+                m_cioActionsCsv << now << ","
+                    << srcCellId << "," << dstCellId << ","
+                    << effectiveCio << "," << (effectiveCio * 2) << "\n";
+            }
+        }
+        std::string ep = "/E2Node/" + std::to_string(srcCellId) + "/";
+        ric->E2SmRcSendCioControlRequest(cioList, ep);
     }
 
     // ── 고착화 체크 ──
@@ -1202,16 +1262,7 @@ xAppHandoverSON_MASAC::InitCsvLoggers()
         m_cioActionsCsv << "time_s,srcCellId,neighborCellId,cioDB,cioIE" << std::endl;
 
         m_maddpgActionsCsv.open("maddpg_actions.csv");
-        size_t maxNeighbors = 0;
-        for (auto& [cellId, neighbors] : m_neighborMap)
-            maxNeighbors = std::max(maxNeighbors, neighbors.size());
-        m_maddpgActionsCsv << "time_s,cellId";
-        for (size_t n = 0; n < maxNeighbors; n++)
-            m_maddpgActionsCsv << ",cioRaw_n" << n;
-        m_maddpgActionsCsv << ",txpRaw";
-        for (size_t n = 0; n < maxNeighbors; n++)
-            m_maddpgActionsCsv << ",cioDB_n" << n;
-        m_maddpgActionsCsv << ",txpApplied_dBm,cellThp_kbps,alpha" << std::endl;
+        m_maddpgActionsCsv << "time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps,alpha" << std::endl;
 
         m_rewardCurveCsv.open("reward_curve.csv");
         m_rewardCurveCsv << "time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std" << std::endl;
@@ -1247,7 +1298,7 @@ xAppHandoverSON_MASAC::LogCellMetrics()
             << cell.ueCount << "," << cell.edgeUeCount << ","
             << cell.totalThroughputDl << "," << cell.totalThroughputUl << ","
             << avgCqi << "," << cell.txPower << ","
-            << cell.prbUtilDl << std::endl;
+            << cell.prbUtilDl << "\n";
     }
 }
 
@@ -1346,7 +1397,7 @@ xAppHandoverSON_MASAC::CheckAndLogStagnation(
             << m_stagnantSteps << ","
             << (cioStagnant ? 1 : 0) << ","
             << (txpStagnant ? 1 : 0) << ","
-            << (isStagnant ? 1 : 0) << std::endl;
+            << (isStagnant ? 1 : 0) << "\n";
 
         m_prevRawActions[cellId] = currAct;
         m_prevUeCounts[cellId] = ueCountCurr;
