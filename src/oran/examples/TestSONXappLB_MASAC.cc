@@ -242,8 +242,8 @@ main(int argc, char* argv[])
     lteHelper->SetEnbAntennaModelType("ns3::IsotropicAntennaModel");
     lteHelper->SetEnbDeviceAttribute("DlEarfcn", UintegerValue(100));
     lteHelper->SetEnbDeviceAttribute("UlEarfcn", UintegerValue(18100));
-    lteHelper->SetEnbDeviceAttribute("DlBandwidth", UintegerValue(100));
-    lteHelper->SetEnbDeviceAttribute("UlBandwidth", UintegerValue(100));
+    lteHelper->SetEnbDeviceAttribute("DlBandwidth", UintegerValue(25));
+    lteHelper->SetEnbDeviceAttribute("UlBandwidth", UintegerValue(25));
 
     lteHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
     lteHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(0.0));
@@ -379,13 +379,21 @@ main(int argc, char* argv[])
             ApplicationContainer clientApps;
             ApplicationContainer serverApps;
 
+            // DL: high-rate UDP to saturate cell PRB
             UdpClientHelper dlClientHelper(ueIpIfaces.GetAddress(u), dlPort);
+            dlClientHelper.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+            dlClientHelper.SetAttribute("Interval", TimeValue(MilliSeconds(1)));
+            dlClientHelper.SetAttribute("PacketSize", UintegerValue(1400));
             clientApps.Add(dlClientHelper.Install(remoteHost));
             PacketSinkHelper dlPacketSinkHelper("ns3::UdpSocketFactory",
                                                 InetSocketAddress(Ipv4Address::GetAny(), dlPort));
             serverApps.Add(dlPacketSinkHelper.Install(ue));
 
+            // UL: moderate rate
             UdpClientHelper ulClientHelper(remoteHostAddr, ulPort);
+            ulClientHelper.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+            ulClientHelper.SetAttribute("Interval", TimeValue(MilliSeconds(2)));
+            ulClientHelper.SetAttribute("PacketSize", UintegerValue(1400));
             clientApps.Add(ulClientHelper.Install(ue));
             PacketSinkHelper ulPacketSinkHelper("ns3::UdpSocketFactory",
                                                 InetSocketAddress(Ipv4Address::GetAny(), ulPort));

@@ -166,6 +166,13 @@ class LteRlc : public Object // SimpleRefCount<LteRlc>
     uint16_t m_rnti; ///< RNTI
     uint8_t m_lcid;  ///< LCID
 
+    uint64_t m_txByteCounter{0}; ///< cumulative TX bytes (actual RLC PDUs sent to MAC)
+    uint64_t m_rxByteCounter{0}; ///< cumulative RX bytes (RLC PDUs received from MAC)
+  public:
+    uint64_t GetTxBytes() const { return m_txByteCounter; }
+    uint64_t GetRxBytes() const { return m_rxByteCounter; }
+  protected:
+
     /**
      * Used to inform of a PDU delivery to the MAC SAP provider
      */

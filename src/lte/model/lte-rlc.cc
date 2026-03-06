@@ -226,6 +226,7 @@ LteRlcSm::DoReceivePdu(LteMacSapUser::ReceivePduParameters rxPduParams)
     delay = Simulator::Now() - rlcTag.GetSenderTimestamp();
     NS_LOG_LOGIC(" RNTI=" << m_rnti << " LCID=" << (uint32_t)m_lcid << " size="
                           << rxPduParams.p->GetSize() << " delay=" << delay.As(Time::NS));
+    m_rxByteCounter += rxPduParams.p->GetSize();
     m_rxPdu(m_rnti, m_lcid, rxPduParams.p->GetSize(), delay.GetNanoSeconds());
 }
 
@@ -253,6 +254,7 @@ LteRlcSm::DoNotifyTxOpportunity(LteMacSapUser::TxOpportunityParameters txOpParam
     // RLC Performance evaluation
     NS_LOG_LOGIC(" RNTI=" << m_rnti << " LCID=" << (uint32_t)m_lcid
                           << " size=" << txOpParams.bytes);
+    m_txByteCounter += txOpParams.bytes;
     m_txPdu(m_rnti, m_lcid, txOpParams.bytes);
 
     m_macSapProvider->TransmitPdu(params);

@@ -382,6 +382,7 @@ LteRlcUm::DoNotifyTxOpportunity(LteMacSapUser::TxOpportunityParameters txOpParam
     // Sender timestamp
     RlcTag rlcTag(Simulator::Now());
     packet->AddByteTag(rlcTag, 1, rlcHeader.GetSerializedSize());
+    m_txByteCounter += packet->GetSize();
     m_txPdu(m_rnti, m_lcid, packet->GetSize());
 
     // Send RLC PDU to MAC layer
@@ -421,6 +422,7 @@ LteRlcUm::DoReceivePdu(LteMacSapUser::ReceivePduParameters rxPduParams)
     NS_ASSERT_MSG(ret, "RlcTag is missing");
 
     delay = Simulator::Now() - rlcTag.GetSenderTimestamp();
+    m_rxByteCounter += rxPduParams.p->GetSize();
     m_rxPdu(m_rnti, m_lcid, rxPduParams.p->GetSize(), delay.GetNanoSeconds());
 
     // 5.1.2.2 Receive operations

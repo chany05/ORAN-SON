@@ -131,6 +131,7 @@ LteRlcTm::DoNotifyTxOpportunity(LteMacSapUser::TxOpportunityParameters txOpParam
     m_txBufferSize -= packet->GetSize();
     m_txBuffer.erase(m_txBuffer.begin());
 
+    m_txByteCounter += packet->GetSize();
     m_txPdu(m_rnti, m_lcid, packet->GetSize());
 
     // Send RLC PDU to MAC layer
@@ -162,6 +163,7 @@ LteRlcTm::DoReceivePdu(LteMacSapUser::ReceivePduParameters rxPduParams)
 {
     NS_LOG_FUNCTION(this << m_rnti << (uint32_t)m_lcid << rxPduParams.p->GetSize());
 
+    m_rxByteCounter += rxPduParams.p->GetSize();
     m_rxPdu(m_rnti, m_lcid, rxPduParams.p->GetSize(), 0);
 
     // 5.1.1.2 Receive operations

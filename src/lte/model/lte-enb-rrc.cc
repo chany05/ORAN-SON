@@ -1637,8 +1637,11 @@ LteEnbRrc::PublishCellKpm()
                 {
                     if (drbInfo && drbInfo->m_pdcp)
                     {
-                        cellDlBytes += drbInfo->m_pdcp->GetTxBytes();
-                        cellUlBytes += drbInfo->m_pdcp->GetRxBytes();
+                        if (drbInfo->m_rlc)
+                        {
+                            cellDlBytes += drbInfo->m_rlc->GetTxBytes();
+                            cellUlBytes += drbInfo->m_rlc->GetRxBytes();
+                        }
                     }
                 }
             

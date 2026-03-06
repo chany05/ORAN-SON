@@ -677,7 +677,7 @@ xAppHandoverSON_MASAC::BuildObservation(uint16_t cellId)
     }
     if (cqiCount > 0) avgCqi /= cqiCount;
     obs[0] = avgCqi / 15.0f;
-    obs[1] = static_cast<float>(cell.totalThroughputDl / 1e3) / 30.0f;
+    obs[1] = static_cast<float>(cell.totalThroughputDl / 1e3) / 5.0f;
     obs[2] = (ueWithData > 0) ? static_cast<float>(edgeCount) / ueWithData : 0.0f;
     uint32_t totalUEs = m_ueContexts.size();
     obs[3] = (totalUEs > 0) ? static_cast<float>(cell.ueCount) / static_cast<float>(totalUEs) : 0.0f;
@@ -706,7 +706,7 @@ xAppHandoverSON_MASAC::ComputeRewards()
         auto cit = m_cellContexts.find(cellId);
         if (sit != m_smoothed.end() && sit->second.initialized)
         {
-            thps.push_back((sit->second.dlThp + sit->second.ulThp) / 1e3 / 30.0);
+            thps.push_back((sit->second.dlThp + sit->second.ulThp) / 1e3 / 5.0);
             ueCounts.push_back(sit->second.ueCount);
             totalUEs += sit->second.ueCount;
         }
@@ -718,48 +718,27 @@ xAppHandoverSON_MASAC::ComputeRewards()
         prbUtils.push_back(cit != m_cellContexts.end() ? cit->second.prbUtilDl : 0.0);
     }
 
-    double meanPrb = std::accumulate(prbUtils.begin(), prbUtils.end(), 0.0) / prbUtils.size();
-    double prbVar = 0.0;
-    for (double p : prbUtils) prbVar += (p - meanPrb) * (p - meanPrb);
-    double stdPrb = std::sqrt(prbVar / prbUtils.size());
-    double meanUe = totalUEs / ueCounts.size();
-    double ueVar = 0.0;
-    for (double u : ueCounts) ueVar += (u - meanUe) * (u - meanUe);
-    double stdUe = std::sqrt(ueVar / ueCounts.size());
-    double stdUeNorm = (totalUEs > 0) ? stdUe / totalUEs : 0.0;
-
-    // Edge UE ratio per cell (smoothed)
-    std::vector<double> edgeRatios;
-    for (auto cellId : m_cellIds)
-    {
-        auto sit = m_smoothed.find(cellId);
-        if (sit != m_smoothed.end() && sit->second.ueCount > 0.5)
-            edgeRatios.push_back(sit->second.edgeUeCount / sit->second.ueCount);
-        else
-            edgeRatios.push_back(0.0);
-    }
-    double meanEdge = std::accumulate(edgeRatios.begin(), edgeRatios.end(), 0.0) / edgeRatios.size();
-    double edgeVar = 0.0;
-    for (double e : edgeRatios) edgeVar += (e - meanEdge) * (e - meanEdge);
-    double stdEdgeRatio = std::sqrt(edgeVar / edgeRatios.size());
-
-    double w_thp       = 10.0;
-    double alpha       = 2.0;
-    double w_load      = 15.0;
-    double w_edge_std  = 5.0;
-    double fairShare = 1.0 / static_cast<double>(ueCounts.size());
+    // Reward: total cell throughput (incentivizes filling idle PRBs via load balancing)
+    double w_thp = 10.0;
 
     std::vector<double> rewards;
     for (size_t i = 0; i < thps.size(); i++)
     {
-        double perUeThp = (ueCounts[i] > 0) ? thps[i] / ueCounts[i] : 0.0;
-        double ueShare = (totalUEs > 0) ? ueCounts[i] / totalUEs : fairShare;
-        double loadDev = ueShare - fairShare;
-        double r = w_thp * perUeThp
-                 - w_edge_std * stdEdgeRatio
-                 - alpha * stdPrb
-                 - w_load * loadDev * loadDev;
+        double r = w_thp * thps[i];
         rewards.push_back(r);
+    }
+
+    // For logging only
+    double meanPrb = std::accumulate(prbUtils.begin(), prbUtils.end(), 0.0) / prbUtils.size();
+    double prbVar = 0.0;
+    for (double p : prbUtils) prbVar += (p - meanPrb) * (p - meanPrb);
+    double stdPrb = std::sqrt(prbVar / prbUtils.size());
+    double stdUeNorm = 0.0;
+    if (totalUEs > 0) {
+        double meanUe = totalUEs / ueCounts.size();
+        double ueVar = 0.0;
+        for (double u : ueCounts) ueVar += (u - meanUe) * (u - meanUe);
+        stdUeNorm = std::sqrt(ueVar / ueCounts.size()) / totalUEs;
     }
 
     if (m_rewardCurveCsv.is_open())
@@ -820,7 +799,7 @@ xAppHandoverSON_MASAC::StepMASAC()
             double smoothTotal = 0.0;
             for (auto& [cid, s] : m_smoothed) smoothTotal += s.ueCount;
             obs[0] = avgCqi / 15.0f;
-            obs[1] = static_cast<float>(sm.dlThp / 1e3) / 30.0f;
+            obs[1] = static_cast<float>(sm.dlThp / 1e3) / 5.0f;
             obs[2] = (sm.ueCount > 0.5) ? static_cast<float>(sm.edgeUeCount / sm.ueCount) : 0.0f;
             obs[3] = (smoothTotal > 0.5) ? static_cast<float>(sm.ueCount / smoothTotal) : 0.0f;
             currentObs.push_back(torch::from_blob(obs.data(), {OBS_DIM}, torch::kFloat32).clone());

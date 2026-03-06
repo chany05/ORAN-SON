@@ -276,6 +276,7 @@ LteRlcAm::DoNotifyTxOpportunity(LteMacSapUser::TxOpportunityParameters txOpParam
         // Sender timestamp
         RlcTag rlcTag(Simulator::Now());
         packet->AddByteTag(rlcTag, 1, rlcAmHeader.GetSerializedSize());
+        m_txByteCounter += packet->GetSize();
         m_txPdu(m_rnti, m_lcid, packet->GetSize());
 
         // Send RLC PDU to MAC layer
@@ -370,6 +371,7 @@ LteRlcAm::DoNotifyTxOpportunity(LteMacSapUser::TxOpportunityParameters txOpParam
 
                     NS_LOG_LOGIC("new AM RLC header: " << rlcAmHeader);
 
+                    m_txByteCounter += packet->GetSize();
                     m_txPdu(m_rnti, m_lcid, packet->GetSize());
 
                     // Send RLC PDU to MAC layer
@@ -764,6 +766,7 @@ LteRlcAm::DoNotifyTxOpportunity(LteMacSapUser::TxOpportunityParameters txOpParam
     m_txedBuffer.at(rlcAmHeader.GetSequenceNumber().GetValue()).m_retxCount = 0;
     m_txedBuffer.at(rlcAmHeader.GetSequenceNumber().GetValue()).m_waitingSince = Simulator::Now();
 
+    m_txByteCounter += packet->GetSize();
     m_txPdu(m_rnti, m_lcid, packet->GetSize());
 
     // Send RLC PDU to MAC layer
@@ -803,6 +806,7 @@ LteRlcAm::DoReceivePdu(LteMacSapUser::ReceivePduParameters rxPduParams)
 
     delay = Simulator::Now() - rlcTag.GetSenderTimestamp();
 
+    m_rxByteCounter += rxPduParams.p->GetSize();
     m_rxPdu(m_rnti, m_lcid, rxPduParams.p->GetSize(), delay.GetNanoSeconds());
 
     if (rlcAmHeader.IsDataPdu())
