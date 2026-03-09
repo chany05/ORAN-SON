@@ -192,19 +192,23 @@ main(int argc, char* argv[])
     bool inferenceOnly  = false;
     bool loadPretrained = false;
     bool saturate       = false;
+    bool baseline       = false;
     double simTime      = 256.0;
+    uint32_t rngRun     = 42;
 
     CommandLine cmd;
     cmd.AddValue("inferenceOnly",  "Inference only (no training)", inferenceOnly);
     cmd.AddValue("loadPretrained", "Load pretrained models",       loadPretrained);
     cmd.AddValue("saturate",       "Saturate Cell1 with 30 UEs",   saturate);
     cmd.AddValue("simTime",        "Simulation duration (s)",       simTime);
+    cmd.AddValue("baseline",       "Baseline: no MADDPG, CIO=0 TXP=32", baseline);
+    cmd.AddValue("rngRun",         "RNG run number (same seed = same UE mobility)", rngRun);
     cmd.Parse(argc, argv);
 
     if (inferenceOnly) loadPretrained = true;
 
     RngSeedManager::SetSeed(1);
-    RngSeedManager::SetRun(static_cast<uint64_t>(std::time(nullptr)));
+    RngSeedManager::SetRun(rngRun);
     GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
 
     uint16_t numberOfUes = 40;
@@ -447,7 +451,7 @@ main(int argc, char* argv[])
     E2AP e2t;
     E2AP e2n1;
 
-    xAppHandoverSON sonxapp(0.5, false, loadPretrained, inferenceOnly, simTime);
+    xAppHandoverSON sonxapp(0.5, false, loadPretrained, inferenceOnly, simTime, baseline);
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
 
@@ -465,6 +469,35 @@ main(int argc, char* argv[])
     enbNodes.Get(2)->AddApplication(&e2n3);
     Simulator::Schedule(Seconds(0.2), &E2AP::Connect, &e2n3);
     Simulator::Schedule(Seconds(0.3), &E2AP::SendE2SetupRequest, &e2n3);
+
+    // UE trajectory CSV logging
+    {
+        std::ofstream ueTrajCsv("ue_trajectory.csv");
+        ueTrajCsv << "time_s,ueIndex,x,y,servingCellId" << std::endl;
+        ueTrajCsv.close();
+
+        for (double t = 0.0; t < simTime; t += 0.5)
+        {
+            Simulator::Schedule(Seconds(t), [&ueNodes, &ueLteDevs, numberOfUes]() {
+                std::ofstream csv("ue_trajectory.csv", std::ios::app);
+                double now = Simulator::Now().GetSeconds();
+                for (uint16_t i = 0; i < numberOfUes; i++)
+                {
+                    Ptr<MobilityModel> mob = ueNodes.Get(i)->GetObject<MobilityModel>();
+                    Vector pos = mob->GetPosition();
+                    Ptr<LteUeNetDevice> ueDev =
+                        DynamicCast<LteUeNetDevice>(ueLteDevs.Get(i));
+                    uint16_t cellId = 0;
+                    if (ueDev && ueDev->GetRrc())
+                        cellId = ueDev->GetRrc()->GetCellId();
+                    csv << now << "," << i << ","
+                        << pos.x << "," << pos.y << ","
+                        << cellId << "\n";
+                }
+                csv.close();
+            });
+        }
+    }
 
     Simulator::Schedule(Seconds(simTime - 1.0), [&sonxapp]() {
         sonxapp.SaveModels();

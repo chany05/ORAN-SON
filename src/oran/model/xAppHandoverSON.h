@@ -267,7 +267,8 @@ class xAppHandoverSON : public xAppHandover
             bool initiateHandovers = false,
             bool loadPretrained = false,
             bool inferenceOnly = false,
-            double simStopTime = 256.0);
+            double simStopTime = 256.0,
+            bool baseline = false);
     void HandoverDecision(Json& payload) override;
 
     // 콜백
@@ -352,6 +353,7 @@ private:
     bool m_useMADDPG = true;
     bool m_loadPretrained = false;
     bool m_inferenceOnly = false;
+    bool m_baseline = false;  // true: CIO=0, TXP=32 고정 (no MADDPG action)
 
     static constexpr int    NUM_AGENTS   = 3;
     static constexpr int    OBS_DIM      = 4;       // [AvgCqi/15, Thp/5Mbps, EdgeRatio, UeRatio]

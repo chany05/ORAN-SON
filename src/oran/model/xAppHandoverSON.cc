@@ -18,11 +18,11 @@ NS_LOG_COMPONENT_DEFINE("xAppHandoverSON");
 
 xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers,
                                  bool loadPretrained, bool inferenceOnly,
-                                 double simStopTime)
+                                 double simStopTime, bool baseline)
     : xAppHandover(),
       m_sonPeriodicitySec(sonPeriodicitySec),
       m_initiateHandovers(initiateHandovers),
-      m_edgeRsrpThreshold(-85.28),
+      m_edgeRsrpThreshold(-79.26),
       m_loadThreshold(12.0),
       m_rsrqThreshold(-15.0),
       m_cqiThreshold(11),
@@ -44,8 +44,9 @@ xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers
     m_loadPretrained = loadPretrained;
     m_inferenceOnly  = inferenceOnly;
     m_simStopTime    = simStopTime;
+    m_baseline       = baseline;
 
-    if (m_useMADDPG)
+    if (m_useMADDPG && !m_baseline)
     {
         InitMADDPG();
     }
@@ -85,7 +86,13 @@ xAppHandoverSON::PeriodicSONCheck()
     std::cout << "\n[TICK] PeriodicSONCheck(MADDPG) - Step: " << m_stepCount
               << " | UE count: " << m_ueContexts.size() << std::endl;
 
-    if (m_useMADDPG)
+    if (m_baseline)
+    {
+        // Baseline: CIO=0, TXP=32 고정, 메트릭만 기록
+        CollectCellThroughput();
+        m_stepCount++;
+    }
+    else if (m_useMADDPG)
     {
         StepMADDPG();
 
@@ -173,9 +180,6 @@ xAppHandoverSON::CollectRsrpRsrq()
             double rsrp = measurement.measurements["VALUE"];
 
             UeKey key = MakeUeKey(cellId, rnti);
-            if (m_ueContexts.find(key) != m_ueContexts.end())
-                continue;
-
             m_ueContexts[key].rnti = rnti;
             m_ueContexts[key].servingCellId = cellId;
             m_ueContexts[key].servingRsrp = rsrp;
@@ -1119,6 +1123,7 @@ void
 xAppHandoverSON::SaveModels(const std::string& dir)
 {
     NS_LOG_FUNCTION(this);
+    if (m_baseline) return;
 
     if (!m_inferenceOnly)
     {
