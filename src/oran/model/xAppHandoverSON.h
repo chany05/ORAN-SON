@@ -40,75 +40,48 @@ struct CellContext
     double txPower;
 };
 
-// ─── MADDPG + Beta Distribution ────────────
-// BetaActor: state → Beta(α,β) distribution → action ∈ [-1, +1]
-// α,β > 1 보장 (softplus+1) → mode 존재, 경계 gradient vanishing 없음
-struct BetaActorNetImpl : torch::nn::Module
+// ─── MADDPG + Tanh Actor (BatchNorm + Xavier init) ────────────
+// Actor: state → BN → ReLU → BN → ReLU → small_init → tanh → action ∈ [-1, +1]
+struct ActorNetImpl : torch::nn::Module
 {
-    BetaActorNetImpl(int64_t obsDim, int64_t actDim, double /*maxAction*/ = 1.0,
-                     double /*preScale*/ = 2.0)
+    ActorNetImpl(int64_t obsDim, int64_t actDim, double /*maxAction*/ = 1.0)
     {
-        fc1 = register_module("fc1", torch::nn::Linear(obsDim, 128));
-        fc2 = register_module("fc2", torch::nn::Linear(128, 128));
-        fc_alpha = register_module("fc_alpha", torch::nn::Linear(128, actDim));
-        fc_beta  = register_module("fc_beta",  torch::nn::Linear(128, actDim));
+        fc1 = register_module("fc1", torch::nn::Linear(obsDim, 256));
+        bn1 = register_module("bn1", torch::nn::BatchNorm1d(256));
+        fc2 = register_module("fc2", torch::nn::Linear(256, 256));
+        bn2 = register_module("bn2", torch::nn::BatchNorm1d(256));
+        fc3 = register_module("fc3", torch::nn::Linear(256, actDim));
+
+        // He initialization for hidden layers (ReLU)
+        torch::nn::init::kaiming_uniform_(fc1->weight, std::sqrt(5));
+        torch::nn::init::zeros_(fc1->bias);
+        torch::nn::init::kaiming_uniform_(fc2->weight, std::sqrt(5));
+        torch::nn::init::zeros_(fc2->bias);
+        // Small init for output layer (prevent tanh saturation)
+        torch::nn::init::uniform_(fc3->weight, -3e-3, 3e-3);
+        torch::nn::init::uniform_(fc3->bias, -3e-3, 3e-3);
     }
 
-    std::pair<torch::Tensor, torch::Tensor> GetAlphaBeta(torch::Tensor obs)
+    torch::Tensor forward(torch::Tensor obs)
     {
-        auto x = torch::leaky_relu(fc1->forward(obs));
-        x = torch::leaky_relu(fc2->forward(x));
-        auto alpha = torch::nn::functional::softplus(fc_alpha->forward(x),
-                         torch::nn::functional::SoftplusFuncOptions()) + 1.0;
-        auto beta  = torch::nn::functional::softplus(fc_beta->forward(x),
-                         torch::nn::functional::SoftplusFuncOptions()) + 1.0;
-        return {alpha, beta};
+        auto x = torch::relu(bn1->forward(fc1->forward(obs)));
+        x = torch::relu(bn2->forward(fc2->forward(x)));
+        return torch::tanh(fc3->forward(x));
     }
 
-    // Stochastic: Gamma trick reparameterization
-    // X ~ Gamma(α,1), Y ~ Gamma(β,1), Z = X/(X+Y) ~ Beta(α,β)
-    std::pair<torch::Tensor, torch::Tensor> sample(torch::Tensor obs)
-    {
-        auto [alpha, beta] = GetAlphaBeta(obs);
-        auto x_gamma = at::_standard_gamma(alpha);
-        auto y_gamma = at::_standard_gamma(beta);
-        auto z = x_gamma / (x_gamma + y_gamma + 1e-8);
-        z = torch::clamp(z, 1e-6, 1.0 - 1e-6);
-        auto action = 2.0 * z - 1.0;  // [0,1] → [-1,1]
-
-        // log_prob of Beta + Jacobian for rescaling
-        auto log_prob = (alpha - 1.0) * torch::log(z)
-                      + (beta - 1.0) * torch::log(1.0 - z)
-                      - torch::lgamma(alpha) - torch::lgamma(beta)
-                      + torch::lgamma(alpha + beta)
-                      - std::log(2.0);
-        log_prob = log_prob.sum(-1, /*keepdim=*/true);
-        return {action, log_prob};
-    }
-
-    // Deterministic: Beta mode = (α-1)/(α+β-2)
-    torch::Tensor deterministic(torch::Tensor obs)
-    {
-        auto [alpha, beta] = GetAlphaBeta(obs);
-        auto mode = (alpha - 1.0) / (alpha + beta - 2.0 + 1e-8);
-        return 2.0 * mode - 1.0;
-    }
-
-    torch::Tensor forward(torch::Tensor obs) { return deterministic(obs); }
-
-    torch::nn::Linear fc1{nullptr}, fc2{nullptr}, fc_alpha{nullptr}, fc_beta{nullptr};
+    torch::nn::Linear fc1{nullptr}, fc2{nullptr}, fc3{nullptr};
+    torch::nn::BatchNorm1d bn1{nullptr}, bn2{nullptr};
 };
-TORCH_MODULE(BetaActorNet);
+TORCH_MODULE(ActorNet);
 
-// Critic: 전체 에이전트 state + action → Q-value
-// 논문: (totalStateDim + totalActDim) → 256-256-1
+// Critic: 전체 에이전트 state + action → Q-value (256-256-1, Python과 동일)
 struct CriticNetImpl : torch::nn::Module
 {
     CriticNetImpl(int64_t totalStateDim, int64_t totalActDim)
     {
-        fc1 = register_module("fc1", torch::nn::Linear(totalStateDim + totalActDim, 128));
-        fc2 = register_module("fc2", torch::nn::Linear(128, 128));
-        fc3 = register_module("fc3", torch::nn::Linear(128, 1));
+        fc1 = register_module("fc1", torch::nn::Linear(totalStateDim + totalActDim, 256));
+        fc2 = register_module("fc2", torch::nn::Linear(256, 256));
+        fc3 = register_module("fc3", torch::nn::Linear(256, 1));
     }
 
     torch::Tensor forward(torch::Tensor state, torch::Tensor action)
@@ -158,30 +131,24 @@ class ReplayBuffer
 
     size_t Size() const { return m_buffer.size(); }
 
-    // ★ 추가: 버퍼 저장
     void Save(const std::string& filename)
     {
         std::vector<torch::Tensor> all_data;
         for (const auto& exp : m_buffer) {
-            // 모든 텐서를 일렬로 붙여서 저장
             for (auto& o : exp.obs) all_data.push_back(o);
             for (auto& a : exp.acts) all_data.push_back(a);
             for (auto& no : exp.nextObs) all_data.push_back(no);
-            // double형 reward도 Tensor로 변환해서 저장
             for (auto r : exp.rewards) all_data.push_back(torch::tensor(r));
         }
         torch::save(all_data, filename);
     }
 
-    // ★ 추가: 버퍼 불러오기
     void Load(const std::string& filename, int obsDim, int actDim, int nAgents)
     {
         std::vector<torch::Tensor> all_data;
         torch::load(all_data, filename);
-
         m_buffer.clear();
-        int elements_per_exp = nAgents * 4; // obs, acts, nextObs, rewards 각각 nAgents개
-        
+        int elements_per_exp = nAgents * 4;
         for (size_t i = 0; i < all_data.size(); i += elements_per_exp) {
             Experience exp;
             for (int j = 0; j < nAgents; j++) exp.obs.push_back(all_data[i + j]);
@@ -208,19 +175,18 @@ struct AgentConfig
     std::vector<uint16_t> neighborCellIds;
 };
 
-// MADDPGAgent (Beta + Entropy regularization)
+// MADDPGAgent (Tanh + BatchNorm)
 class MADDPGAgent
 {
   public:
     MADDPGAgent(const AgentConfig& config,
                 int64_t totalObsDim, int64_t totalActDim,
-                double actorLr = 1e-4, double criticLr = 3e-4, double maxAction = 1.0)
-        : m_config(config), m_maxAction(maxAction),
-          m_targetEntropy(-static_cast<double>(config.actDim))
+                double actorLr = 3e-4, double criticLr = 3e-4, double maxAction = 1.0)
+        : m_config(config), m_maxAction(maxAction)
     {
-        m_actor = BetaActorNet(config.obsDim, config.actDim, maxAction);
+        m_actor = ActorNet(config.obsDim, config.actDim, maxAction);
         m_critic = CriticNet(totalObsDim, totalActDim);
-        m_targetActor = BetaActorNet(config.obsDim, config.actDim, maxAction);
+        m_targetActor = ActorNet(config.obsDim, config.actDim, maxAction);
         m_targetCritic = CriticNet(totalObsDim, totalActDim);
 
         HardCopyParams(m_actor, m_targetActor);
@@ -230,20 +196,16 @@ class MADDPGAgent
             m_actor->parameters(), torch::optim::AdamOptions(actorLr));
         m_criticOpt = std::make_shared<torch::optim::Adam>(
             m_critic->parameters(), torch::optim::AdamOptions(criticLr));
-
-        // Entropy temperature α (learnable log-scale)
-        m_logAlpha = torch::zeros({1}, torch::requires_grad(true));
-        m_alphaOpt = std::make_shared<torch::optim::Adam>(
-            std::vector<torch::Tensor>{m_logAlpha}, torch::optim::AdamOptions(3e-4));
     }
 
     torch::Tensor SelectAction(torch::Tensor obs, bool deterministic = true)
     {
         torch::NoGradGuard noGrad;
-        if (deterministic)
-            return m_actor->deterministic(obs);
-        auto [action, log_prob] = m_actor->sample(obs);
-        return action;
+        m_actor->eval();  // BN eval mode for inference
+        auto input = obs.dim() == 1 ? obs.unsqueeze(0) : obs;  // (4,) → (1,4)
+        auto act = m_actor->forward(input);
+        m_actor->train(); // back to train mode
+        return act.squeeze(0);  // (1,2) → (2,)
     }
 
     void SoftUpdateTargets(double tau)
@@ -252,17 +214,14 @@ class MADDPGAgent
         SoftUpdate(m_critic, m_targetCritic, tau);
     }
 
-    BetaActorNet& GetActor()         { return m_actor; }
-    BetaActorNet& GetTargetActor()   { return m_targetActor; }
+    ActorNet& GetActor()         { return m_actor; }
+    ActorNet& GetTargetActor()   { return m_targetActor; }
     CriticNet& GetCritic()       { return m_critic; }
     CriticNet& GetTargetCritic() { return m_targetCritic; }
     torch::optim::Adam& GetActorOpt()  { return *m_actorOpt; }
     torch::optim::Adam& GetCriticOpt() { return *m_criticOpt; }
     const AgentConfig& GetConfig() const { return m_config; }
     double GetMaxAction() const { return m_maxAction; }
-    torch::Tensor& GetLogAlpha() { return m_logAlpha; }
-    torch::optim::Adam& GetAlphaOpt() { return *m_alphaOpt; }
-    double GetTargetEntropy() const { return m_targetEntropy; }
 
   private:
     template <typename M>
@@ -272,6 +231,10 @@ class MADDPGAgent
         auto sp = src->named_parameters();
         auto tp = tgt->named_parameters();
         for (auto& p : sp) tp[p.key()].copy_(p.value());
+        // Copy BN running stats (buffers)
+        auto sb = src->named_buffers();
+        auto tb = tgt->named_buffers();
+        for (auto& b : sb) tb[b.key()].copy_(b.value());
     }
 
     template <typename M>
@@ -282,16 +245,17 @@ class MADDPGAgent
         auto tp = tgt->named_parameters();
         for (auto& p : sp)
             tp[p.key()].copy_(tau * p.value() + (1.0 - tau) * tp[p.key()]);
+        // Copy BN running stats (buffers) directly
+        auto sb = src->named_buffers();
+        auto tb = tgt->named_buffers();
+        for (auto& b : sb) tb[b.key()].copy_(b.value());
     }
 
     AgentConfig m_config;
     double m_maxAction;
-    double m_targetEntropy;
-    BetaActorNet m_actor{nullptr}, m_targetActor{nullptr};
+    ActorNet m_actor{nullptr}, m_targetActor{nullptr};
     CriticNet m_critic{nullptr}, m_targetCritic{nullptr};
     std::shared_ptr<torch::optim::Adam> m_actorOpt, m_criticOpt;
-    torch::Tensor m_logAlpha;
-    std::shared_ptr<torch::optim::Adam> m_alphaOpt;
 };
 
 // ─── xApp 본체 ─────────────────────────────────────────
@@ -299,8 +263,11 @@ class MADDPGAgent
 class xAppHandoverSON : public xAppHandover
 {
   public:
-    xAppHandoverSON(float sonPeriodicitySec = 1.0,
-            bool initiateHandovers = false);
+    xAppHandoverSON(float sonPeriodicitySec = 0.5,
+            bool initiateHandovers = false,
+            bool loadPretrained = false,
+            bool inferenceOnly = false,
+            double simStopTime = 256.0);
     void HandoverDecision(Json& payload) override;
 
     // 콜백
@@ -310,16 +277,11 @@ class xAppHandoverSON : public xAppHandover
                          uint16_t rnti, uint16_t targetCellId);
     void ConnectionEstablished(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti);
 
-    // 주기적 SON 체크
     void PeriodicSONCheck();
 
-    // MADDPG 모델 저장/로드
     void SaveModels(const std::string& dir = "maddpg_models");
     void LoadModels(const std::string& dir = "maddpg_models");
 
-    void LogCioAction(uint16_t srcCell, uint16_t neighborCell, int cioDB, int cioIE);
-    void LogMaddpgAction(uint16_t cellId, float cioAction, float txpAction,
-                        double txpApplied, double reward, double alpha);
   private:
     using UeKey = uint32_t;
     static inline UeKey MakeUeKey(uint16_t servingCellId, uint16_t rnti)
@@ -339,29 +301,19 @@ class xAppHandoverSON : public xAppHandover
     void CollectKPMs();
     void CollectRsrpRsrq();
     void CollectCqi();
-    //void CollectThroughput();
     void CollectUeCount();
     void CollectCellKpms();
-    void CollectCellThroughput();   // ★ 셀 throughput 수집 (DL+UL)
+    void CollectCellThroughput();
     void PurgeStaleUeContexts();
     void CollectTargetRsrq();
 
-    // Edge UE 계산
     void CalculateEdgeUEs();
-    double FriisDistanceEstimate(double rsrp_dBm, double txPower_dBm, double freq_Hz, uint16_t rnti, uint16_t cellId);
-
-    // 부하 계산 (규칙 기반 — m_useMADDPG=false일 때)
     void CalculateLoadScores();
     bool IsCellOverloaded(uint16_t cellId);
 
-    // 의사결정 (규칙 기반)
     uint16_t MakeSONDecision(UeKey key);
     uint16_t FindLeastLoadedNeighbor(UeKey key);
     uint16_t FindBestRsrqCell(UeKey key);
-
-    void ApplyCioActions(const std::vector<double>& cioActions,
-                          const std::vector<uint16_t>& cellIds,
-                          const std::vector<std::string>& enbEndpoints);
 
     // 상태 저장
     std::map<UeKey, UEContext> m_ueContexts;
@@ -373,8 +325,6 @@ class xAppHandoverSON : public xAppHandover
     // 설정 파라미터
     float m_sonPeriodicitySec;
     bool m_initiateHandovers;
-    //double m_cellRadius;
-    //double m_edgeThreshold;
     double m_loadThreshold;
     double m_rsrqThreshold;
     double m_cqiThreshold;
@@ -384,27 +334,41 @@ class xAppHandoverSON : public xAppHandover
     std::map<uint16_t, double> m_lastThroughputDl;
     std::map<uint16_t, double> m_lastThroughputUl;
     uint16_t m_dlBandwidthPrb;
-    // 헤더에 추가
     std::map<uint16_t, double> m_prevCellDlBytes;
     std::map<uint16_t, double> m_prevCellUlBytes;
-    // xAppHandoverSON.h 멤버 변수에 추가
     std::ofstream m_rewardCurveCsv;
 
-    // ── MADDPG (FineBalancer 논문 사양) ──────────────
+    // ── CSV buffering ──
+    std::vector<std::string> m_cellMetricsBuf;
+    std::vector<std::string> m_cioActionsBuf;
+    std::vector<std::string> m_maddpgActionsBuf;
+    std::vector<std::string> m_rewardCurveBuf;
+    std::vector<std::string> m_stagnationBuf;
+public:
+    void FlushCsvLogs();
+private:
+
+    // ── MADDPG ──────────────
     bool m_useMADDPG = true;
-    bool m_loadPretrained = false;   // ★ 처음부터 학습
-    bool m_inferenceOnly = false;    // ★ 학습 모드
+    bool m_loadPretrained = false;
+    bool m_inferenceOnly = false;
 
     static constexpr int    NUM_AGENTS   = 3;
-    static constexpr int    OBS_DIM      = 4;       // [AvgCqi, Thp, FarUes, ServedUes]
-    // ACT_DIM은 이웃 셀 수에 따라 동적 결정: neighbors.size() + 1 (per-neighbor CIO + TXP)
+    static constexpr int    OBS_DIM      = 4;       // [AvgCqi/15, Thp/5Mbps, EdgeRatio, UeRatio]
+    static constexpr int    ACT_DIM      = 2;       // [CIO, TXP] Python과 동일
     static constexpr double MAX_ACTION   = 1.0;
-    static constexpr size_t BUFFER_SIZE  = 10000;
-    static constexpr size_t BATCH_SIZE   = 128;
+    static constexpr size_t BUFFER_SIZE  = 100000;   // Python: 1e6
+    static constexpr size_t BATCH_SIZE   = 256;      // Python과 동일
     static constexpr double GAMMA        = 0.99;
     static constexpr double TAU_SOFT     = 0.005;
-    static constexpr double ACTOR_LR     = 1e-4;
+    static constexpr double ACTOR_LR     = 3e-4;    // Python과 동일
     static constexpr double CRITIC_LR    = 3e-4;
+
+    // Epsilon-greedy exploration (Python MADDPG와 동일)
+    double m_epsilon        = 1.0;
+    double m_epsilonEnd     = 1e-15;
+    double m_epsilonDecay   = 0.9999;
+    double m_explNoise      = 0.1;    // Gaussian noise scale
 
     // 에이전트 + 버퍼
     std::vector<std::unique_ptr<MADDPGAgent>> m_agents;
@@ -415,12 +379,31 @@ class xAppHandoverSON : public xAppHandover
     std::vector<torch::Tensor> m_prevActs;
     bool m_hasPrevStep = false;
     uint64_t m_stepCount = 0;
-    double m_simStopTime = 256.0;  // 시뮬레이션 종료 시간 (done flag용)
+    double m_simStopTime = 256.0;
 
     // 셀 토폴로지
     std::vector<uint16_t> m_cellIds;
     std::map<uint16_t, std::vector<uint16_t>> m_neighborMap;
     uint32_t m_totalUEs = 40;
+
+    // EMA smoothing for noisy cell metrics
+    static constexpr double EMA_ALPHA = 0.3;
+    struct SmoothedCellMetrics {
+        double ueCount = 0.0;
+        double edgeUeCount = 0.0;
+        double dlThp = 0.0;
+        double ulThp = 0.0;
+        bool initialized = false;
+    };
+    std::map<uint16_t, SmoothedCellMetrics> m_smoothed;
+
+    // Per-cell CIO: effective CIO(src→dst) = CIO_dst - CIO_src
+    std::map<uint16_t, int> m_cellCio;
+
+    // Random engine for epsilon-greedy
+    std::mt19937 m_rng{std::random_device{}()};
+    std::uniform_real_distribution<double> m_uniformDist{0.0, 1.0};
+    std::normal_distribution<double> m_normalDist{0.0, 1.0};
 
     // MADDPG 함수
     void InitMADDPG();
@@ -429,7 +412,7 @@ class xAppHandoverSON : public xAppHandover
     void StepMADDPG();
     void TrainMADDPG();
 
-    //csv logging
+    // csv logging
     std::ofstream m_cellMetricsCsv;
     std::ofstream m_cioActionsCsv;
     std::ofstream m_maddpgActionsCsv;
@@ -437,17 +420,16 @@ class xAppHandoverSON : public xAppHandover
     void InitCsvLoggers();
     void LogCellMetrics();
 
-    // ── 고착화(stagnation) 체크 ──
+    // 고착화 체크
     std::ofstream m_stagnationCsv;
-    std::map<uint16_t, std::vector<float>> m_prevRawActions;   // cellId → 이전 raw action
-    std::map<uint16_t, uint32_t> m_prevUeCounts;               // cellId → 이전 UE 수
-    std::vector<double> m_prevRewards;                          // 이전 스텝 reward
-    uint32_t m_stagnantSteps = 0;                               // 연속 고착 스텝 카운터
-    static constexpr double STAGNATION_ACTION_THRESH = 0.02;    // action 변화 임계값
-    static constexpr double STAGNATION_REWARD_THRESH = 0.01;    // reward 변화 임계값
+    std::map<uint16_t, std::vector<float>> m_prevRawActions;
+    std::map<uint16_t, uint32_t> m_prevUeCounts;
+    std::vector<double> m_prevRewards;
+    uint32_t m_stagnantSteps = 0;
+    static constexpr double STAGNATION_ACTION_THRESH = 0.02;
+    static constexpr double STAGNATION_REWARD_THRESH = 0.01;
     void CheckAndLogStagnation(const std::vector<torch::Tensor>& currentActs,
                                const std::vector<double>& rewards);
-
 };
 
 } // namespace oran

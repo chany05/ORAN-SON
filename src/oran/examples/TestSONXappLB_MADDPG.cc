@@ -1,6 +1,6 @@
 //
-// MASAC variant of TestSONXappLB
-// Multi-Agent SAC (Soft Actor-Critic) for load balancing
+// MADDPG (Beta Distribution) variant of TestSONXappLB
+// Same scenario as MASAC: 3 cells, 40 UEs, 5MHz BW
 //
 
 #include "ns3/E2AP.h"
@@ -9,7 +9,7 @@
 #include "ns3/lte-module.h"
 #include "ns3/mobility-module.h"
 #include "ns3/point-to-point-module.h"
-#include "ns3/xAppHandoverSON_MASAC.h"
+#include "ns3/xAppHandoverSON.h"
 #include "ns3/config-store-module.h"
 #include <ns3/lte-ue-net-device.h>
 #include <ns3/lte-ue-rrc.h>
@@ -18,12 +18,12 @@
 #include <string>
 #include <ctime>
 
-NS_LOG_COMPONENT_DEFINE("TestHandoverSONXapp_MASAC");
+NS_LOG_COMPONENT_DEFINE("TestHandoverSONXapp_MADDPG");
 
 using namespace ns3;
 using namespace oran;
 
-class Registry_MASAC
+class Registry_MADDPG
 {
   public:
     enum registerType
@@ -61,8 +61,8 @@ class Registry_MASAC
         {DISCONNECTION_UE, "DISCONNECTION_UE"},
     };
 
-    Registry_MASAC(uint64_t imsi, uint16_t cellId, uint16_t rnti,
-                   uint16_t trgtCellId, enum registerType type)
+    Registry_MADDPG(uint64_t imsi, uint16_t cellId, uint16_t rnti,
+                    uint16_t trgtCellId, enum registerType type)
         : m_timestamp(Simulator::Now()),
           m_imsi(imsi),
           m_srcCellId(cellId),
@@ -72,7 +72,7 @@ class Registry_MASAC
     {
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const Registry_MASAC& registry);
+    friend std::ostream& operator<<(std::ostream& os, const Registry_MADDPG& registry);
 
   private:
     Time m_timestamp;
@@ -84,105 +84,105 @@ class Registry_MASAC
 };
 
 std::ostream&
-operator<<(std::ostream& os, const Registry_MASAC& registry)
+operator<<(std::ostream& os, const Registry_MADDPG& registry)
 {
     os << registry.m_timestamp.GetNanoSeconds() << "," << registry.m_imsi << ","
        << registry.m_srcCellId << "," << registry.m_rnti << "," << registry.m_trgtCellId << ","
-       << Registry_MASAC::registerTypeStr.at(registry.m_type) << ",";
+       << Registry_MADDPG::registerTypeStr.at(registry.m_type) << ",";
     return os;
 }
 
-std::vector<Registry_MASAC> simulationRegistry_MASAC;
+std::vector<Registry_MADDPG> simulationRegistry_MADDPG;
 
 void
-NotifyConnectionEstablishedUe_MASAC(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
+NotifyConnectionEstablishedUe_MADDPG(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
 {
     std::cout << context << " UE IMSI " << imsi << ": connected to CellId " << cellid
               << " with RNTI " << rnti << std::endl;
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, cellid,
-                                          Registry_MASAC::CONNECTION_ESTABLISHED_UE);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, cellid,
+                                           Registry_MADDPG::CONNECTION_ESTABLISHED_UE);
 }
 
 void
-NotifyHandoverStartUe_MASAC(std::string context, uint64_t imsi, uint16_t cellid,
-                            uint16_t rnti, uint16_t targetCellId)
+NotifyHandoverStartUe_MADDPG(std::string context, uint64_t imsi, uint16_t cellid,
+                              uint16_t rnti, uint16_t targetCellId)
 {
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, targetCellId,
-                                          Registry_MASAC::HANDOVER_START_UE);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, targetCellId,
+                                           Registry_MADDPG::HANDOVER_START_UE);
 }
 
 void
-NotifyHandoverEndOkUe_MASAC(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
+NotifyHandoverEndOkUe_MADDPG(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
 {
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, cellid,
-                                          Registry_MASAC::HANDOVER_OK_UE);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, cellid,
+                                           Registry_MADDPG::HANDOVER_OK_UE);
 }
 
 void
-NotifyConnectionEstablishedEnb_MASAC(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
+NotifyConnectionEstablishedEnb_MADDPG(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
 {
     std::cout << context << " eNB CellId " << cellid << ": connection of UE IMSI "
               << imsi << " RNTI " << rnti << std::endl;
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, cellid,
-                                          Registry_MASAC::CONNECTION_ESTABLISHED_ENB);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, cellid,
+                                           Registry_MADDPG::CONNECTION_ESTABLISHED_ENB);
 }
 
 void
-NotifyConnectionReconfigurationEnb_MASAC(std::string context, uint64_t imsi,
-                                         uint16_t cellid, uint16_t rnti)
+NotifyConnectionReconfigurationEnb_MADDPG(std::string context, uint64_t imsi,
+                                          uint16_t cellid, uint16_t rnti)
 {
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, cellid,
-                                          Registry_MASAC::CONNECTION_RECONFIGURATION_ENB);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, cellid,
+                                           Registry_MADDPG::CONNECTION_RECONFIGURATION_ENB);
 }
 
 void
-NotifyHandoverStartEnb_MASAC(std::string context, uint64_t imsi, uint16_t cellid,
-                             uint16_t rnti, uint16_t targetCellId)
+NotifyHandoverStartEnb_MADDPG(std::string context, uint64_t imsi, uint16_t cellid,
+                               uint16_t rnti, uint16_t targetCellId)
 {
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, targetCellId,
-                                          Registry_MASAC::HANDOVER_START_ENB);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, targetCellId,
+                                           Registry_MADDPG::HANDOVER_START_ENB);
 }
 
 void
-NotifyHandoverCancelledEnb_MASAC(std::string context, uint64_t imsi, uint16_t cellid,
-                                 uint16_t rnti, uint16_t targetCellId)
+NotifyHandoverCancelledEnb_MADDPG(std::string context, uint64_t imsi, uint16_t cellid,
+                                   uint16_t rnti, uint16_t targetCellId)
 {
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, targetCellId,
-                                          Registry_MASAC::HANDOVER_CANCELLED_RIC);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, targetCellId,
+                                           Registry_MADDPG::HANDOVER_CANCELLED_RIC);
 }
 
 void
-NotifyHandoverTriggeredEnb_MASAC(std::string context, uint64_t imsi, uint16_t cellid,
-                                 uint16_t rnti, uint16_t targetCellId)
+NotifyHandoverTriggeredEnb_MADDPG(std::string context, uint64_t imsi, uint16_t cellid,
+                                   uint16_t rnti, uint16_t targetCellId)
 {
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, targetCellId,
-                                          Registry_MASAC::HANDOVER_TRIGGERED_ENB);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, targetCellId,
+                                           Registry_MADDPG::HANDOVER_TRIGGERED_ENB);
 }
 
 void
-NotifyHandoverEndOkEnb_MASAC(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
+NotifyHandoverEndOkEnb_MADDPG(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
 {
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, cellid,
-                                          Registry_MASAC::HANDOVER_OK_ENB);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, cellid,
+                                           Registry_MADDPG::HANDOVER_OK_ENB);
 }
 
 void
-NotifyHandoverEndErrorUe_MASAC(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
+NotifyHandoverEndErrorUe_MADDPG(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti)
 {
     std::cout << context << " eNB CellId " << cellid << ": HO error UE IMSI "
               << imsi << " RNTI " << rnti << std::endl;
-    simulationRegistry_MASAC.emplace_back(imsi, cellid, rnti, cellid,
-                                          Registry_MASAC::HANDOVER_ERROR_UE);
+    simulationRegistry_MADDPG.emplace_back(imsi, cellid, rnti, cellid,
+                                           Registry_MADDPG::HANDOVER_ERROR_UE);
 }
 
 void
-UeStateTransition_MASAC(std::string context, uint64_t imsi, uint16_t cellId,
-                        uint16_t rnti, LteUeRrc::State oldState, LteUeRrc::State newState)
+UeStateTransition_MADDPG(std::string context, uint64_t imsi, uint16_t cellId,
+                          uint16_t rnti, LteUeRrc::State oldState, LteUeRrc::State newState)
 {
     if (oldState == LteUeRrc::CONNECTED_NORMALLY && newState != LteUeRrc::CONNECTED_NORMALLY)
     {
-        simulationRegistry_MASAC.emplace_back(imsi, cellId, rnti, cellId,
-                                              Registry_MASAC::DISCONNECTION_UE);
+        simulationRegistry_MADDPG.emplace_back(imsi, cellId, rnti, cellId,
+                                               Registry_MADDPG::DISCONNECTION_UE);
     }
 }
 
@@ -191,7 +191,7 @@ main(int argc, char* argv[])
 {
     bool inferenceOnly  = false;
     bool loadPretrained = false;
-    bool saturate       = false;   // 포화 시나리오: Cell1에 UE 집중
+    bool saturate       = false;
     double simTime      = 256.0;
 
     CommandLine cmd;
@@ -201,7 +201,6 @@ main(int argc, char* argv[])
     cmd.AddValue("simTime",        "Simulation duration (s)",       simTime);
     cmd.Parse(argc, argv);
 
-    // inference-only면 자동으로 pretrained 로드
     if (inferenceOnly) loadPretrained = true;
 
     RngSeedManager::SetSeed(1);
@@ -213,15 +212,15 @@ main(int argc, char* argv[])
     uint16_t numBearersPerUe = 2;
     double enbTxPowerDbm = 32.0;
 
-    std::cout << "=== MASAC Load Balancing Test ===" << std::endl;
+    std::cout << "=== MADDPG (Beta) Load Balancing Test ===" << std::endl;
     std::cout << "  eNBs: " << numberOfEnbs << std::endl;
     std::cout << "  UEs: " << numberOfUes << std::endl;
     std::cout << "  SimTime: " << simTime << "s" << std::endl;
-    std::cout << "  SON Period: 1s, Handover: ON" << std::endl;
+    std::cout << "  SON Period: 0.5s" << std::endl;
     std::cout << "  InferenceOnly: " << (inferenceOnly ? "YES" : "NO") << std::endl;
     std::cout << "  LoadPretrained: " << (loadPretrained ? "YES" : "NO") << std::endl;
     std::cout << "  Saturate: " << (saturate ? "YES (Cell1 heavy)" : "NO") << std::endl;
-    std::cout << "=================================" << std::endl;
+    std::cout << "=========================================" << std::endl;
 
     Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(20)));
     Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(2048));
@@ -291,13 +290,11 @@ main(int argc, char* argv[])
 
     if (saturate)
     {
-        // ── 포화 시나리오: Cell1(250,356) 근처에 30 UE, Cell2(750,356)에 5, Cell3(500,789)에 5 ──
         Ptr<ListPositionAllocator> satAlloc = CreateObject<ListPositionAllocator>();
         Ptr<UniformRandomVariable> rng = CreateObject<UniformRandomVariable>();
         rng->SetAttribute("Min", DoubleValue(0.0));
         rng->SetAttribute("Max", DoubleValue(1.0));
 
-        // Cell1 주변 30 UE (±80m)
         for (int i = 0; i < 30; i++) {
             double x = 250.0 + (rng->GetValue() - 0.5) * 160.0;
             double y = 356.0 + (rng->GetValue() - 0.5) * 160.0;
@@ -305,7 +302,6 @@ main(int argc, char* argv[])
             y = std::max(50.0, std::min(950.0, y));
             satAlloc->Add(Vector(x, y, 0));
         }
-        // Cell2 주변 5 UE (±80m)
         for (int i = 0; i < 5; i++) {
             double x = 750.0 + (rng->GetValue() - 0.5) * 160.0;
             double y = 356.0 + (rng->GetValue() - 0.5) * 160.0;
@@ -313,7 +309,6 @@ main(int argc, char* argv[])
             y = std::max(50.0, std::min(950.0, y));
             satAlloc->Add(Vector(x, y, 0));
         }
-        // Cell3 주변 5 UE (±80m)
         for (int i = 0; i < 5; i++) {
             double x = 500.0 + (rng->GetValue() - 0.5) * 160.0;
             double y = 789.0 + (rng->GetValue() - 0.5) * 160.0;
@@ -341,7 +336,7 @@ main(int argc, char* argv[])
 
     ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
         "Bounds", RectangleValue(Rectangle(50, 950, 50, 950)),
-        "Speed", StringValue("ns3::ConstantRandomVariable[Constant=1]"),
+        "Speed", StringValue("ns3::ConstantRandomVariable[Constant=3]"),
         "Pause", StringValue("ns3::ConstantRandomVariable[Constant=0.1]"));
     ueMobility.Install(ueNodes);
 
@@ -379,7 +374,6 @@ main(int argc, char* argv[])
             ApplicationContainer clientApps;
             ApplicationContainer serverApps;
 
-            // DL: high-rate UDP to saturate cell PRB
             UdpClientHelper dlClientHelper(ueIpIfaces.GetAddress(u), dlPort);
             dlClientHelper.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
             dlClientHelper.SetAttribute("Interval", TimeValue(MilliSeconds(1)));
@@ -389,7 +383,6 @@ main(int argc, char* argv[])
                                                 InetSocketAddress(Ipv4Address::GetAny(), dlPort));
             serverApps.Add(dlPacketSinkHelper.Install(ue));
 
-            // UL: moderate rate
             UdpClientHelper ulClientHelper(remoteHostAddr, ulPort);
             ulClientHelper.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
             ulClientHelper.SetAttribute("Interval", TimeValue(MilliSeconds(2)));
@@ -430,31 +423,31 @@ main(int argc, char* argv[])
 
     // 콜백
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/ConnectionEstablished",
-                    MakeCallback(&NotifyConnectionEstablishedEnb_MASAC));
+                    MakeCallback(&NotifyConnectionEstablishedEnb_MADDPG));
     Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/ConnectionEstablished",
-                    MakeCallback(&NotifyConnectionEstablishedUe_MASAC));
+                    MakeCallback(&NotifyConnectionEstablishedUe_MADDPG));
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverStart",
-                    MakeCallback(&NotifyHandoverStartEnb_MASAC));
+                    MakeCallback(&NotifyHandoverStartEnb_MADDPG));
     Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/HandoverStart",
-                    MakeCallback(&NotifyHandoverStartUe_MASAC));
+                    MakeCallback(&NotifyHandoverStartUe_MADDPG));
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverEndOk",
-                    MakeCallback(&NotifyHandoverEndOkEnb_MASAC));
+                    MakeCallback(&NotifyHandoverEndOkEnb_MADDPG));
     Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/HandoverEndOk",
-                    MakeCallback(&NotifyHandoverEndOkUe_MASAC));
+                    MakeCallback(&NotifyHandoverEndOkUe_MADDPG));
     Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/HandoverEndError",
-                    MakeCallback(&NotifyHandoverEndErrorUe_MASAC));
+                    MakeCallback(&NotifyHandoverEndErrorUe_MADDPG));
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverCancelled",
-                    MakeCallback(&NotifyHandoverCancelledEnb_MASAC));
+                    MakeCallback(&NotifyHandoverCancelledEnb_MADDPG));
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverTriggered",
-                    MakeCallback(&NotifyHandoverTriggeredEnb_MASAC));
+                    MakeCallback(&NotifyHandoverTriggeredEnb_MADDPG));
     Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/StateTransition",
-                    MakeCallback(&UeStateTransition_MASAC));
+                    MakeCallback(&UeStateTransition_MADDPG));
 
-    // E2AP + MASAC xApp
+    // E2AP + MADDPG xApp
     E2AP e2t;
     E2AP e2n1;
 
-    xAppHandoverSON_MASAC sonxapp(0.5, false, loadPretrained, inferenceOnly, simTime);
+    xAppHandoverSON sonxapp(0.5, false, loadPretrained, inferenceOnly, simTime);
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
 
@@ -472,31 +465,6 @@ main(int argc, char* argv[])
     enbNodes.Get(2)->AddApplication(&e2n3);
     Simulator::Schedule(Seconds(0.2), &E2AP::Connect, &e2n3);
     Simulator::Schedule(Seconds(0.3), &E2AP::SendE2SetupRequest, &e2n3);
-
-    // UE 위치 트래커
-    /*std::ofstream ueTrajCsv("ue_trajectory.csv");
-    ueTrajCsv << "time_s,ueIndex,x,y,servingCellId" << std::endl;
-    ueTrajCsv.close();
-
-    for (double t = 0.0; t < simTime; t += 0.5)
-    {
-        Simulator::Schedule(Seconds(t), [&ueNodes, &ueLteDevs, numberOfUes]() {
-            std::ofstream csv("ue_trajectory.csv", std::ios::app);
-            double now = Simulator::Now().GetSeconds();
-            for (uint16_t i = 0; i < numberOfUes; i++)
-            {
-                Ptr<MobilityModel> mob = ueNodes.Get(i)->GetObject<MobilityModel>();
-                Vector pos = mob->GetPosition();
-                Ptr<LteUeNetDevice> ueDev = DynamicCast<LteUeNetDevice>(ueLteDevs.Get(i));
-                uint16_t cellId = 0;
-                if (ueDev && ueDev->GetRrc())
-                    cellId = ueDev->GetRrc()->GetCellId();
-                csv << now << "," << i << "," << pos.x << "," << pos.y << ","
-                    << cellId << std::endl;
-            }
-            csv.close();
-        });
-    }*/
 
     Simulator::Schedule(Seconds(simTime - 1.0), [&sonxapp]() {
         sonxapp.SaveModels();

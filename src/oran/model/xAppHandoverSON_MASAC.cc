@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <sstream>
 #include <numeric>
 #include <random>
 
@@ -621,14 +622,14 @@ xAppHandoverSON_MASAC::InitMASAC()
     m_neighborMap[3] = {1, 2};
 
     int64_t totalObsDim = NUM_AGENTS * OBS_DIM;
-    int64_t totalActDim = NUM_AGENTS * 2;  // each agent: [CIO_self, TXP]
+    int64_t totalActDim = NUM_AGENTS * 1;  // each agent: [CIO_self]
 
     for (auto cellId : m_cellIds)
     {
         AgentConfig_MASAC config;
         config.cellId = cellId;
         config.obsDim = OBS_DIM;
-        config.actDim = 2;  // [CIO_self, TXP]
+        config.actDim = 1;  // [CIO_self] (TXP removed)
         config.neighborCellIds = m_neighborMap[cellId];
 
         m_agents.push_back(std::make_unique<MASACAgent>(
@@ -706,7 +707,7 @@ xAppHandoverSON_MASAC::ComputeRewards()
         auto cit = m_cellContexts.find(cellId);
         if (sit != m_smoothed.end() && sit->second.initialized)
         {
-            thps.push_back((sit->second.dlThp + sit->second.ulThp) / 1e3 / 5.0);
+            thps.push_back(sit->second.dlThp + sit->second.ulThp);  // raw kbps
             ueCounts.push_back(sit->second.ueCount);
             totalUEs += sit->second.ueCount;
         }
@@ -718,14 +719,12 @@ xAppHandoverSON_MASAC::ComputeRewards()
         prbUtils.push_back(cit != m_cellContexts.end() ? cit->second.prbUtilDl : 0.0);
     }
 
-    // Reward: total cell throughput (incentivizes filling idle PRBs via load balancing)
-    double w_thp = 10.0;
-
+    // Reward: per-UE throughput
     std::vector<double> rewards;
     for (size_t i = 0; i < thps.size(); i++)
     {
-        double r = w_thp * thps[i];
-        rewards.push_back(r);
+        double perUeThp = (ueCounts[i] > 0) ? thps[i] / ueCounts[i] : 0.0;
+        rewards.push_back(perUeThp);
     }
 
     // For logging only
@@ -741,13 +740,14 @@ xAppHandoverSON_MASAC::ComputeRewards()
         stdUeNorm = std::sqrt(ueVar / ueCounts.size()) / totalUEs;
     }
 
-    if (m_rewardCurveCsv.is_open())
     {
         double now = Simulator::Now().GetSeconds();
-        m_rewardCurveCsv << now << "," << m_stepCount;
+        std::ostringstream oss;
+        oss << now << "," << m_stepCount;
         for (size_t i = 0; i < rewards.size(); i++)
-            m_rewardCurveCsv << "," << rewards[i];
-        m_rewardCurveCsv << "," << stdPrb << "," << stdUeNorm << "\n";
+            oss << "," << rewards[i];
+        oss << "," << stdPrb << "," << stdUeNorm;
+        m_rewardCurveBuf.push_back(oss.str());
     }
 
     return rewards;
@@ -918,21 +918,15 @@ xAppHandoverSON_MASAC::StepMASAC()
         auto actData = act.accessor<float, 1>();
         const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
 
-        // ── Per-cell CIO: action[0] = self CIO, action[1] = TXP ──
+        // ── Per-cell CIO: action[0] = self CIO (no TXP) ──
         int selfCioDB = std::max(-5, std::min(5,
             static_cast<int>(std::round(actData[0] * 5.0))));
         m_cellCio[srcCell] = selfCioDB;
 
-        std::string endpoint = "/E2Node/" + std::to_string(srcCell) + "/";
-        double txpOffset = static_cast<double>(actData[1]) * 4.0;
-        double txpApplied = std::max(26.0, std::min(38.0, m_txPower + txpOffset));
-        ric->E2SmRcSendTxPowerControlRequest(txpApplied, endpoint);
-
         // ── 콘솔 로그 ──
         std::cout << "[ACT-MASAC] Step=" << m_stepCount
             << " Cell" << srcCell << " selfCIO=" << selfCioDB
-            << "dB TXP=" << txpApplied << "dBm raw=["
-            << actData[0] << "," << actData[1] << "]" << std::endl;
+            << "dB raw=[" << actData[0] << "]" << std::endl;
 
         // ── CSV logging (every 5 steps) ──
         if (m_stepCount % 5 == 0)
@@ -944,10 +938,12 @@ xAppHandoverSON_MASAC::StepMASAC()
                 cellThp = cellIt->second.totalThroughputDl + cellIt->second.totalThroughputUl;
 
             double alpha_val = m_agents[i]->GetLogAlpha().exp().item<double>();
-            m_maddpgActionsCsv << now << "," << srcCell
-                << "," << actData[0] << "," << actData[1]
-                << "," << selfCioDB << "," << txpApplied
-                << "," << cellThp << "," << alpha_val << "\n";
+            std::ostringstream oss;
+            oss << now << "," << srcCell
+                << "," << actData[0] << ",0"
+                << "," << selfCioDB << "," << m_txPower
+                << "," << cellThp << "," << alpha_val;
+            m_maddpgActionsBuf.push_back(oss.str());
         }
     }
 
@@ -967,13 +963,14 @@ xAppHandoverSON_MASAC::StepMASAC()
             entry["CIO_VALUE"] = effectiveCio * 2;  // IE units
             cioList.push_back(entry);
 
-            // CSV logging
-            if (m_stepCount % 5 == 0 && m_cioActionsCsv.is_open())
+            // Buffer CSV logging
+            if (m_stepCount % 5 == 0)
             {
                 double now = Simulator::Now().GetSeconds();
-                m_cioActionsCsv << now << ","
-                    << srcCellId << "," << dstCellId << ","
-                    << effectiveCio << "," << (effectiveCio * 2) << "\n";
+                std::ostringstream oss;
+                oss << now << "," << srcCellId << "," << dstCellId << ","
+                    << effectiveCio << "," << (effectiveCio * 2);
+                m_cioActionsBuf.push_back(oss.str());
             }
         }
         std::string ep = "/E2Node/" + std::to_string(srcCellId) + "/";
@@ -1222,39 +1219,14 @@ xAppHandoverSON_MASAC::LoadModels(const std::string& dir)
 void
 xAppHandoverSON_MASAC::InitCsvLoggers()
 {
-    if (m_loadPretrained | m_inferenceOnly)
+    // Buffer CSV headers (no file I/O during simulation)
+    if (!(m_loadPretrained | m_inferenceOnly))
     {
-        m_cellMetricsCsv.open("cell_metrics.csv", std::ios::app);
-        m_cioActionsCsv.open("cio_actions.csv", std::ios::app);
-        m_maddpgActionsCsv.open("maddpg_actions.csv", std::ios::app);
-        m_rewardCurveCsv.open("reward_curve.csv", std::ios::app);
-        m_stagnationCsv.open("stagnation_check.csv", std::ios::app);
-    }
-    else
-    {
-        m_cellMetricsCsv.open("cell_metrics.csv");
-        m_cellMetricsCsv << "time_s,cellId,ueCount,edgeUeCount,"
-            << "cellDlThp_kbps,cellUlThp_kbps,"
-            << "avgCqi,txPower_dBm,prbUtilDl" << std::endl;
-
-        m_cioActionsCsv.open("cio_actions.csv");
-        m_cioActionsCsv << "time_s,srcCellId,neighborCellId,cioDB,cioIE" << std::endl;
-
-        m_maddpgActionsCsv.open("maddpg_actions.csv");
-        m_maddpgActionsCsv << "time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps,alpha" << std::endl;
-
-        m_rewardCurveCsv.open("reward_curve.csv");
-        m_rewardCurveCsv << "time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std" << std::endl;
-
-        m_stagnationCsv.open("stagnation_check.csv");
-        m_stagnationCsv << "time_s,step,cellId,"
-            << "cio_l2_change,max_cio_change,"
-            << "txp_raw_curr,txp_raw_prev,txp_raw_change,"
-            << "txp_dBm_curr,txp_dBm_prev,"
-            << "ue_count_prev,ue_count_curr,ue_count_change,"
-            << "reward_prev,reward_curr,reward_change,"
-            << "consecutive_stagnant_steps,"
-            << "cio_stagnant,txp_stagnant,is_stagnant" << std::endl;
+        m_cellMetricsBuf.push_back("time_s,cellId,ueCount,edgeUeCount,cellDlThp_kbps,cellUlThp_kbps,avgCqi,txPower_dBm,prbUtilDl");
+        m_cioActionsBuf.push_back("time_s,srcCellId,neighborCellId,cioDB,cioIE");
+        m_maddpgActionsBuf.push_back("time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps,alpha");
+        m_rewardCurveBuf.push_back("time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std");
+        m_stagnationBuf.push_back("time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant");
     }
 }
 
@@ -1272,12 +1244,13 @@ xAppHandoverSON_MASAC::LogCellMetrics()
         }
         if (cqiCount > 0) avgCqi /= cqiCount;
 
-        m_cellMetricsCsv
-            << now << "," << cellId << ","
+        std::ostringstream oss;
+        oss << now << "," << cellId << ","
             << cell.ueCount << "," << cell.edgeUeCount << ","
             << cell.totalThroughputDl << "," << cell.totalThroughputUl << ","
             << avgCqi << "," << cell.txPower << ","
-            << cell.prbUtilDl << "\n";
+            << cell.prbUtilDl;
+        m_cellMetricsBuf.push_back(oss.str());
     }
 }
 
@@ -1289,7 +1262,7 @@ xAppHandoverSON_MASAC::CheckAndLogStagnation(
     const std::vector<torch::Tensor>& currentActs,
     const std::vector<double>& rewards)
 {
-    if (!m_stagnationCsv.is_open()) return;
+    // Stagnation check always runs (buffered)
 
     double now = Simulator::Now().GetSeconds();
     bool allStagnant = true;
@@ -1367,16 +1340,20 @@ xAppHandoverSON_MASAC::CheckAndLogStagnation(
                        && (rewardChange < STAGNATION_REWARD_THRESH);
         if (!isStagnant) allStagnant = false;
 
-        m_stagnationCsv << now << "," << m_stepCount << "," << cellId << ","
-            << cioL2Change << "," << maxCioChange << ","
-            << txpRaw << "," << prevTxpRaw << "," << txpRawChange << ","
-            << txpApplied << "," << prevTxpApplied << ","
-            << ueCountPrev << "," << ueCountCurr << "," << ueCountChange << ","
-            << rewardPrev << "," << rewardCurr << "," << rewardChange << ","
-            << m_stagnantSteps << ","
-            << (cioStagnant ? 1 : 0) << ","
-            << (txpStagnant ? 1 : 0) << ","
-            << (isStagnant ? 1 : 0) << "\n";
+        {
+            std::ostringstream oss;
+            oss << now << "," << m_stepCount << "," << cellId << ","
+                << cioL2Change << "," << maxCioChange << ","
+                << txpRaw << "," << prevTxpRaw << "," << txpRawChange << ","
+                << txpApplied << "," << prevTxpApplied << ","
+                << ueCountPrev << "," << ueCountCurr << "," << ueCountChange << ","
+                << rewardPrev << "," << rewardCurr << "," << rewardChange << ","
+                << m_stagnantSteps << ","
+                << (cioStagnant ? 1 : 0) << ","
+                << (txpStagnant ? 1 : 0) << ","
+                << (isStagnant ? 1 : 0);
+            m_stagnationBuf.push_back(oss.str());
+        }
 
         m_prevRawActions[cellId] = currAct;
         m_prevUeCounts[cellId] = ueCountCurr;
@@ -1394,4 +1371,31 @@ xAppHandoverSON_MASAC::CheckAndLogStagnation(
         NS_LOG_UNCOND("[STAGNATION-MASAC] WARNING: " << m_stagnantSteps
             << " consecutive stagnant steps at t=" << now << "s");
     }
+}
+
+// =============================================================================
+// CSV 버퍼 → 파일 일괄 쓰기 (시뮬레이션 종료 시 1회)
+// =============================================================================
+void
+xAppHandoverSON_MASAC::FlushCsvLogs()
+{
+    auto writeFile = [](const std::string& filename, const std::vector<std::string>& buf, bool append) {
+        if (buf.empty()) return;
+        std::ofstream f(filename, append ? std::ios::app : std::ios::out);
+        for (const auto& line : buf)
+            f << line << "\n";
+        f.close();
+    };
+
+    bool append = (m_loadPretrained || m_inferenceOnly);
+    writeFile("cell_metrics.csv",     m_cellMetricsBuf,     append);
+    writeFile("cio_actions.csv",      m_cioActionsBuf,      append);
+    writeFile("maddpg_actions.csv",   m_maddpgActionsBuf,   append);
+    writeFile("reward_curve.csv",     m_rewardCurveBuf,     append);
+    writeFile("stagnation_check.csv", m_stagnationBuf,      append);
+
+    NS_LOG_UNCOND("[MASAC] CSV logs flushed ("
+        << m_cellMetricsBuf.size() << " cell_metrics, "
+        << m_cioActionsBuf.size() << " cio_actions, "
+        << m_rewardCurveBuf.size() << " reward_curve rows)");
 }

@@ -368,6 +368,16 @@ class xAppHandoverSON_MASAC : public xAppHandover
     std::map<uint16_t, double> m_prevCellUlBytes;
     std::ofstream m_rewardCurveCsv;
 
+    // ── CSV buffering ──
+    std::vector<std::string> m_cellMetricsBuf;
+    std::vector<std::string> m_cioActionsBuf;
+    std::vector<std::string> m_maddpgActionsBuf;
+    std::vector<std::string> m_rewardCurveBuf;
+    std::vector<std::string> m_stagnationBuf;
+public:
+    void FlushCsvLogs();
+private:
+
     // ── MASAC ──────────────
     bool m_useMADDPG = true;
     bool m_loadPretrained = false;
