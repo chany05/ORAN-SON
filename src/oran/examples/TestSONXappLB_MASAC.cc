@@ -229,7 +229,7 @@ main(int argc, char* argv[])
     std::cout << "=================================" << std::endl;
 
     Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(20)));
-    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(2048));
+    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(1024));
     Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(0));
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
@@ -310,7 +310,7 @@ main(int argc, char* argv[])
         // eNB 삼각형 무게중심(500, 500) 기준 ±200 범위 내 랜덤 중심
         double cx = 400.0 + uRng->GetValue() * 200.0;  // 400~600
         double cy = 400.0 + uRng->GetValue() * 200.0;  // 400~600
-        double sigma = saturate ? 200.0 : 250.0;
+        double sigma = saturate ? 150.0 : 300.0;
 
         std::cout << "[UE-DIST] Gaussian center=(" << std::fixed << std::setprecision(0)
                   << cx << "," << cy << ") σ=" << sigma << "m"

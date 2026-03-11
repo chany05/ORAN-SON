@@ -88,11 +88,12 @@ struct SACActorNetImpl : torch::nn::Module
         torch::nn::init::zeros_(fc1->bias);
         torch::nn::init::kaiming_uniform_(fc2->weight, std::sqrt(5));
         torch::nn::init::zeros_(fc2->bias);
-        // Output heads: large init so μ starts far from 0
-        torch::nn::init::uniform_(fc_mean->weight, -0.5, 0.5);
-        torch::nn::init::uniform_(fc_mean->bias, -0.2, 0.2);
+        // Output heads: small init so μ starts near 0 (avoid tanh saturation)
+        torch::nn::init::uniform_(fc_mean->weight, -0.3, 0.3);
+        torch::nn::init::uniform_(fc_mean->bias, -0.08, 0.08);
+        // log_std bias = -1.0 → initial std ≈ 0.37 (moderate exploration, avoid tanh saturation)
         torch::nn::init::uniform_(fc_logstd->weight, -3e-3, 3e-3);
-        torch::nn::init::uniform_(fc_logstd->bias, -3e-3, 3e-3);
+        torch::nn::init::uniform_(fc_logstd->bias, -4e-3, 4e-3);
     }
 
     // Stochastic: reparameterization trick a = tanh(μ + σ*ε)
@@ -267,7 +268,7 @@ class MASACAgent
                int64_t totalObsDim, int64_t totalActDim,
                double actorLr = 7e-5, double criticLr = 1e-4)
         : m_config(config),
-          m_targetEntropy(-1.0)  // -actDim/2 for 2D action space
+          m_targetEntropy(-1.5)  // -actDim/2 for 3D action space
     {
         m_actor = SACActorNet(config.obsDim, config.actDim);
         m_critic = TwinCriticNet(totalObsDim, totalActDim);
@@ -443,7 +444,7 @@ private:
     static constexpr int    NUM_AGENTS   = 3;
     static constexpr int    OBS_DIM      = 4;
     static constexpr double MAX_ACTION   = 1.0;
-    static constexpr size_t BUFFER_SIZE  = 2000;
+    static constexpr size_t BUFFER_SIZE  = 100000;
     static constexpr size_t BATCH_SIZE   = 64;
     static constexpr double GAMMA        = 0.99;
     static constexpr double TAU_SOFT     = 0.005;
@@ -486,8 +487,8 @@ private:
     };
     std::map<uint16_t, SmoothedCellMetrics> m_smoothed;
 
-    // Per-cell CIO (global): effective CIO(src→dst) = CIO_dst - CIO_src
-    std::map<uint16_t, int> m_cellCio;
+    // Per-neighbor CIO: m_neighborCio[srcCell][dstCell] = CIO dB
+    std::map<uint16_t, std::map<uint16_t, int>> m_neighborCio;
 
     // MASAC 함수
     void InitMASAC();

@@ -387,7 +387,7 @@ private:
 
     static constexpr int    NUM_AGENTS   = 3;
     static constexpr int    OBS_DIM      = 4;       // [AvgCqi/15, Thp/5Mbps, EdgeRatio, UeRatio]
-    static constexpr int    ACT_DIM      = 2;       // [CIO, TXP] Python과 동일
+    static constexpr int    ACT_DIM      = 3;       // [CIO_n1, CIO_n2, TXP]
     static constexpr double MAX_ACTION   = 1.0;
     static constexpr size_t BUFFER_SIZE  = 100000;   // Python: 1e6
     static constexpr size_t BATCH_SIZE   = 64;
@@ -429,8 +429,8 @@ private:
     };
     std::map<uint16_t, SmoothedCellMetrics> m_smoothed;
 
-    // Per-cell CIO: effective CIO(src→dst) = CIO_dst - CIO_src
-    std::map<uint16_t, int> m_cellCio;
+    // Per-neighbor CIO: m_neighborCio[srcCell][dstCell] = CIO dB
+    std::map<uint16_t, std::map<uint16_t, int>> m_neighborCio;
 
     // Random engine for epsilon-greedy
     std::mt19937 m_rng{std::random_device{}()};

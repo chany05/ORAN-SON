@@ -10,6 +10,7 @@
 #include <sstream>
 #include <numeric>
 #include <random>
+#include <iomanip>
 
 using namespace ns3;
 using namespace oran;
@@ -701,14 +702,14 @@ xAppHandoverSON::InitMADDPG()
     m_neighborMap[3] = {1, 2};
 
     int64_t totalObsDim = NUM_AGENTS * OBS_DIM;
-    int64_t totalActDim = NUM_AGENTS * ACT_DIM;  // each agent: [CIO, TXP]
+    int64_t totalActDim = NUM_AGENTS * ACT_DIM;  // each agent: [CIO_n1, CIO_n2, TXP]
 
     for (auto cellId : m_cellIds)
     {
         AgentConfig config;
         config.cellId = cellId;
         config.obsDim = OBS_DIM;
-        config.actDim = ACT_DIM;  // [CIO, TXP]
+        config.actDim = ACT_DIM;  // [CIO_n1, CIO_n2, TXP]
         config.neighborCellIds = m_neighborMap[cellId];
 
         m_agents.push_back(std::make_unique<MADDPGAgent>(
@@ -926,13 +927,17 @@ xAppHandoverSON::StepMADDPG()
         currentActs.push_back(act);
 
         auto actData = act.accessor<float, 1>();
+        const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
 
-        // ── action[0] = self CIO, action[1] = TXP ──
-        int selfCioDB = std::max(-5, std::min(5,
-            static_cast<int>(std::round(actData[0] * 5.0))));
-        m_cellCio[srcCell] = selfCioDB;
+        // ── action[0]=CIO→neighbor1, action[1]=CIO→neighbor2, action[2]=TXP ──
+        for (size_t n = 0; n < neighbors.size(); n++)
+        {
+            int cioDB = std::max(-5, std::min(5,
+                static_cast<int>(std::round(actData[n] * 5.0))));
+            m_neighborCio[srcCell][neighbors[n]] = cioDB;
+        }
 
-        double txpOffset = static_cast<double>(actData[1]) * 4.0;
+        double txpOffset = static_cast<double>(actData[neighbors.size()]) * 4.0;
         double txpApplied = m_txPower + txpOffset;
         txpApplied = std::max(26.0, std::min(38.0, txpApplied));
 
@@ -940,11 +945,20 @@ xAppHandoverSON::StepMADDPG()
         std::string ep = "/E2Node/" + std::to_string(srcCell) + "/";
         ric->E2SmRcSendTxPowerControlRequest(txpApplied, ep);
 
-        // ── 콘솔 로그 ──
+        // ── 콘솔 로그 (precision 복원) ──
+        auto oldFmt = std::cout.flags();
+        auto oldPrec = std::cout.precision();
+        std::cout << std::defaultfloat << std::setprecision(4);
         std::cout << "[ACT-MADDPG] Step=" << m_stepCount
-            << " Cell" << srcCell << " selfCIO=" << selfCioDB
-            << "dB TXP=" << txpApplied << "dBm raw=[" << actData[0]
-            << "," << actData[1] << "]" << std::endl;
+            << " Cell" << srcCell;
+        for (size_t n = 0; n < neighbors.size(); n++)
+            std::cout << " CIO->" << neighbors[n] << "=" << m_neighborCio[srcCell][neighbors[n]] << "dB";
+        std::cout << " TXP=" << txpApplied << "dBm raw=[";
+        for (int64_t d = 0; d < act.size(0); d++)
+            std::cout << (d > 0 ? "," : "") << actData[d];
+        std::cout << "]" << std::endl;
+        std::cout.flags(oldFmt);
+        std::cout.precision(oldPrec);
 
         // ── CSV logging (every 5 steps) ──
         if (m_stepCount % 5 == 0)
@@ -956,28 +970,37 @@ xAppHandoverSON::StepMADDPG()
                 cellThp = cellIt->second.totalThroughputDl + cellIt->second.totalThroughputUl;
 
             std::ostringstream oss;
-            oss << now << "," << srcCell
-                << "," << actData[0] << "," << actData[1]
-                << "," << selfCioDB << "," << txpApplied
+            oss << now << "," << srcCell;
+            for (size_t n = 0; n < neighbors.size(); n++)
+                oss << "," << actData[n];
+            oss << "," << actData[neighbors.size()];
+            for (size_t n = 0; n < neighbors.size(); n++)
+                oss << "," << m_neighborCio[srcCell][neighbors[n]];
+            oss << "," << txpApplied
                 << "," << cellThp;
             m_maddpgActionsBuf.push_back(oss.str());
         }
     }
 
-    // ── Apply effective CIO: CIO(src→dst) = CIO_dst - CIO_src ──
+    // ── Apply per-neighbor CIO directly ──
     for (auto srcCellId : m_cellIds)
     {
         auto nit = m_neighborMap.find(srcCellId);
         if (nit == m_neighborMap.end()) continue;
         Json cioList = Json::array();
-        int srcCio = m_cellCio.count(srcCellId) ? m_cellCio[srcCellId] : 0;
         for (auto dstCellId : nit->second)
         {
-            int dstCio = m_cellCio.count(dstCellId) ? m_cellCio[dstCellId] : 0;
-            int effectiveCio = std::max(-5, std::min(5, dstCio - srcCio));
+            int cioDB = 0;
+            auto srcIt = m_neighborCio.find(srcCellId);
+            if (srcIt != m_neighborCio.end())
+            {
+                auto dstIt = srcIt->second.find(dstCellId);
+                if (dstIt != srcIt->second.end())
+                    cioDB = dstIt->second;
+            }
             Json entry;
             entry["CELL_ID"] = dstCellId;
-            entry["CIO_VALUE"] = effectiveCio * 2;  // IE units
+            entry["CIO_VALUE"] = cioDB * 2;  // IE units
             cioList.push_back(entry);
 
             if (m_stepCount % 5 == 0)
@@ -985,7 +1008,7 @@ xAppHandoverSON::StepMADDPG()
                 double now = Simulator::Now().GetSeconds();
                 std::ostringstream oss;
                 oss << now << "," << srcCellId << "," << dstCellId << ","
-                    << effectiveCio << "," << (effectiveCio * 2);
+                    << cioDB << "," << (cioDB * 2);
                 m_cioActionsBuf.push_back(oss.str());
             }
         }
@@ -1301,7 +1324,7 @@ xAppHandoverSON::InitCsvLoggers()
     {
         m_cellMetricsBuf.push_back("time_s,cellId,ueCount,edgeUeCount,cellDlThp_kbps,cellUlThp_kbps,avgCqi,txPower_dBm,prbUtilDl");
         m_cioActionsBuf.push_back("time_s,srcCellId,neighborCellId,cioDB,cioIE");
-        m_maddpgActionsBuf.push_back("time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps,alpha");
+        m_maddpgActionsBuf.push_back("time_s,cellId,cio_n1_raw,cio_n2_raw,txpRaw,cio_n1_dB,cio_n2_dB,txpApplied_dBm,cellThp_kbps,alpha");
         m_rewardCurveBuf.push_back("time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std,ue_std");
         m_stagnationBuf.push_back("time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant");
         m_trainDiagBuf.push_back("time_s,step,agent,actor_loss,critic_loss,actor_grad_norm,critic_grad_norm,actor_weight_norm,critic_weight_norm,act_mean,act_std,sat_ratio");
@@ -1381,8 +1404,10 @@ xAppHandoverSON::CheckAndLogStagnation(
         for (int64_t d = 0; d < actDim; d++)
             currAct[d] = actData[d];
 
-        // CIO = action[0], TXP = action[1]
-        float txpRaw = (actDim > 1) ? currAct[1] : 0.0f;
+        const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
+        int64_t cioEndIdx = static_cast<int64_t>(neighbors.size());
+
+        float txpRaw = currAct[cioEndIdx];
         double txpApplied = m_txPower + static_cast<double>(txpRaw) * 4.0;
         txpApplied = std::max(26.0, std::min(38.0, txpApplied));
 
@@ -1394,16 +1419,17 @@ xAppHandoverSON::CheckAndLogStagnation(
         auto prevIt = m_prevRawActions.find(cellId);
         if (prevIt != m_prevRawActions.end() && (int64_t)prevIt->second.size() == actDim)
         {
-            // CIO change (action[0] only)
-            double diff = std::abs(currAct[0] - prevIt->second[0]);
-            cioL2Change = diff;
-            maxCioChange = diff;
-            // TXP change
-            if (actDim > 1)
+            cioL2Change = 0.0;
+            maxCioChange = 0.0;
+            for (int64_t d = 0; d < cioEndIdx; d++)
             {
-                prevTxpRaw = prevIt->second[1];
-                txpRawChange = std::abs(txpRaw - prevTxpRaw);
+                double diff = std::abs(currAct[d] - prevIt->second[d]);
+                cioL2Change += diff * diff;
+                maxCioChange = std::max(maxCioChange, diff);
             }
+            cioL2Change = std::sqrt(cioL2Change);
+            prevTxpRaw = prevIt->second[cioEndIdx];
+            txpRawChange = std::abs(txpRaw - prevTxpRaw);
         }
 
         double prevTxpApplied = m_txPower + static_cast<double>(prevTxpRaw) * 4.0;
