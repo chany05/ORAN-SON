@@ -191,33 +191,38 @@ main(int argc, char* argv[])
 {
     bool inferenceOnly  = false;
     bool loadPretrained = false;
-    bool saturate       = false;   // 포화 시나리오: Cell1에 UE 집중
+    bool saturate       = false;
     double simTime      = 256.0;
+    uint32_t rngRun     = 42;
+    uint16_t numberOfUes = 30;
 
     CommandLine cmd;
     cmd.AddValue("inferenceOnly",  "Inference only (no training)", inferenceOnly);
     cmd.AddValue("loadPretrained", "Load pretrained models",       loadPretrained);
     cmd.AddValue("saturate",       "Saturate Cell1 with 30 UEs",   saturate);
     cmd.AddValue("simTime",        "Simulation duration (s)",       simTime);
+    cmd.AddValue("rngRun",         "RNG run number (same seed = same UE mobility)", rngRun);
+    cmd.AddValue("numUes",         "Number of UEs",                numberOfUes);
     cmd.Parse(argc, argv);
 
-    // inference-only면 자동으로 pretrained 로드
     if (inferenceOnly) loadPretrained = true;
 
     RngSeedManager::SetSeed(1);
-    RngSeedManager::SetRun(static_cast<uint64_t>(std::time(nullptr)));
+    if (rngRun == 42)
+        RngSeedManager::SetRun(static_cast<uint64_t>(std::time(nullptr)));
+    else
+        RngSeedManager::SetRun(rngRun);
     GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
 
-    uint16_t numberOfUes = 40;
     uint16_t numberOfEnbs = 3;
-    uint16_t numBearersPerUe = 2;
+    uint16_t numBearersPerUe = 1;
     double enbTxPowerDbm = 32.0;
 
     std::cout << "=== MASAC Load Balancing Test ===" << std::endl;
     std::cout << "  eNBs: " << numberOfEnbs << std::endl;
     std::cout << "  UEs: " << numberOfUes << std::endl;
     std::cout << "  SimTime: " << simTime << "s" << std::endl;
-    std::cout << "  SON Period: 1s, Handover: ON" << std::endl;
+    std::cout << "  SON Period: 0.5s, Train every 3 steps" << std::endl;
     std::cout << "  InferenceOnly: " << (inferenceOnly ? "YES" : "NO") << std::endl;
     std::cout << "  LoadPretrained: " << (loadPretrained ? "YES" : "NO") << std::endl;
     std::cout << "  Saturate: " << (saturate ? "YES (Cell1 heavy)" : "NO") << std::endl;
@@ -245,6 +250,7 @@ main(int argc, char* argv[])
     lteHelper->SetEnbDeviceAttribute("DlBandwidth", UintegerValue(25));
     lteHelper->SetEnbDeviceAttribute("UlBandwidth", UintegerValue(25));
 
+    // A3 핸드오버 항상 활성 (saturate에서도 CIO로 부하분산 가능하게)
     lteHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
     lteHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(0.0));
     lteHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(0)));
@@ -289,59 +295,41 @@ main(int argc, char* argv[])
 
     MobilityHelper ueMobility;
 
-    if (saturate)
     {
-        // ── 포화 시나리오: Cell1(250,356) 근처에 30 UE, Cell2(750,356)에 5, Cell3(500,789)에 5 ──
-        Ptr<ListPositionAllocator> satAlloc = CreateObject<ListPositionAllocator>();
-        Ptr<UniformRandomVariable> rng = CreateObject<UniformRandomVariable>();
-        rng->SetAttribute("Min", DoubleValue(0.0));
-        rng->SetAttribute("Max", DoubleValue(1.0));
+        // ── 가우시안 UE 배치 ──
+        // 중심: eNB 삼각형 내부 (300~700, 400~750) 에서 랜덤
+        // saturate: σ=150m (집중), normal: σ=250m (균등에 가까움)
+        Ptr<ListPositionAllocator> ueAlloc = CreateObject<ListPositionAllocator>();
+        Ptr<UniformRandomVariable> uRng = CreateObject<UniformRandomVariable>();
+        uRng->SetAttribute("Min", DoubleValue(0.0));
+        uRng->SetAttribute("Max", DoubleValue(1.0));
+        Ptr<NormalRandomVariable> nRng = CreateObject<NormalRandomVariable>();
+        nRng->SetAttribute("Mean", DoubleValue(0.0));
+        nRng->SetAttribute("Variance", DoubleValue(1.0));
 
-        // Cell1 주변 30 UE (±80m)
-        for (int i = 0; i < 30; i++) {
-            double x = 250.0 + (rng->GetValue() - 0.5) * 160.0;
-            double y = 356.0 + (rng->GetValue() - 0.5) * 160.0;
-            x = std::max(50.0, std::min(950.0, x));
-            y = std::max(50.0, std::min(950.0, y));
-            satAlloc->Add(Vector(x, y, 0));
+        // eNB 삼각형 무게중심(500, 500) 기준 ±200 범위 내 랜덤 중심
+        double cx = 400.0 + uRng->GetValue() * 200.0;  // 400~600
+        double cy = 400.0 + uRng->GetValue() * 200.0;  // 400~600
+        double sigma = saturate ? 200.0 : 250.0;
+
+        std::cout << "[UE-DIST] Gaussian center=(" << std::fixed << std::setprecision(0)
+                  << cx << "," << cy << ") σ=" << sigma << "m"
+                  << (saturate ? " (saturate)" : " (normal)") << std::endl;
+
+        for (uint16_t i = 0; i < numberOfUes; i++)
+        {
+            double x = cx + nRng->GetValue() * sigma;
+            double y = cy + nRng->GetValue() * sigma;
+            x = std::max(100.0, std::min(900.0, x));
+            y = std::max(100.0, std::min(900.0, y));
+            ueAlloc->Add(Vector(x, y, 0));
         }
-        // Cell2 주변 5 UE (±80m)
-        for (int i = 0; i < 5; i++) {
-            double x = 750.0 + (rng->GetValue() - 0.5) * 160.0;
-            double y = 356.0 + (rng->GetValue() - 0.5) * 160.0;
-            x = std::max(50.0, std::min(950.0, x));
-            y = std::max(50.0, std::min(950.0, y));
-            satAlloc->Add(Vector(x, y, 0));
-        }
-        // Cell3 주변 5 UE (±80m)
-        for (int i = 0; i < 5; i++) {
-            double x = 500.0 + (rng->GetValue() - 0.5) * 160.0;
-            double y = 789.0 + (rng->GetValue() - 0.5) * 160.0;
-            x = std::max(50.0, std::min(950.0, x));
-            y = std::max(50.0, std::min(950.0, y));
-            satAlloc->Add(Vector(x, y, 0));
-        }
-        std::cout << "[SATURATE] 30 UEs @ Cell1, 5 @ Cell2, 5 @ Cell3" << std::endl;
-        ueMobility.SetPositionAllocator(satAlloc);
-    }
-    else
-    {
-        Ptr<RandomRectanglePositionAllocator> ueAllocator =
-            CreateObject<RandomRectanglePositionAllocator>();
-        Ptr<UniformRandomVariable> xPos = CreateObject<UniformRandomVariable>();
-        xPos->SetAttribute("Min", DoubleValue(100.0));
-        xPos->SetAttribute("Max", DoubleValue(900.0));
-        ueAllocator->SetX(xPos);
-        Ptr<UniformRandomVariable> yPos = CreateObject<UniformRandomVariable>();
-        yPos->SetAttribute("Min", DoubleValue(100.0));
-        yPos->SetAttribute("Max", DoubleValue(900.0));
-        ueAllocator->SetY(yPos);
-        ueMobility.SetPositionAllocator(ueAllocator);
+        ueMobility.SetPositionAllocator(ueAlloc);
     }
 
     ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
         "Bounds", RectangleValue(Rectangle(50, 950, 50, 950)),
-        "Speed", StringValue("ns3::ConstantRandomVariable[Constant=1]"),
+        "Speed", StringValue("ns3::ConstantRandomVariable[Constant=3]"),
         "Pause", StringValue("ns3::ConstantRandomVariable[Constant=0.1]"));
     ueMobility.Install(ueNodes);
 
@@ -379,21 +367,19 @@ main(int argc, char* argv[])
             ApplicationContainer clientApps;
             ApplicationContainer serverApps;
 
-            // DL: high-rate UDP to saturate cell PRB
             UdpClientHelper dlClientHelper(ueIpIfaces.GetAddress(u), dlPort);
             dlClientHelper.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
             dlClientHelper.SetAttribute("Interval", TimeValue(MilliSeconds(1)));
-            dlClientHelper.SetAttribute("PacketSize", UintegerValue(1400));
+            dlClientHelper.SetAttribute("PacketSize", UintegerValue(160));
             clientApps.Add(dlClientHelper.Install(remoteHost));
             PacketSinkHelper dlPacketSinkHelper("ns3::UdpSocketFactory",
                                                 InetSocketAddress(Ipv4Address::GetAny(), dlPort));
             serverApps.Add(dlPacketSinkHelper.Install(ue));
 
-            // UL: moderate rate
             UdpClientHelper ulClientHelper(remoteHostAddr, ulPort);
             ulClientHelper.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
-            ulClientHelper.SetAttribute("Interval", TimeValue(MilliSeconds(2)));
-            ulClientHelper.SetAttribute("PacketSize", UintegerValue(1400));
+            ulClientHelper.SetAttribute("Interval", TimeValue(MilliSeconds(1)));
+            ulClientHelper.SetAttribute("PacketSize", UintegerValue(160));
             clientApps.Add(ulClientHelper.Install(ue));
             PacketSinkHelper ulPacketSinkHelper("ns3::UdpSocketFactory",
                                                 InetSocketAddress(Ipv4Address::GetAny(), ulPort));
@@ -454,7 +440,7 @@ main(int argc, char* argv[])
     E2AP e2t;
     E2AP e2n1;
 
-    xAppHandoverSON_MASAC sonxapp(0.5, false, loadPretrained, inferenceOnly, simTime);
+    xAppHandoverSON_MASAC sonxapp(1.0, false, loadPretrained, inferenceOnly, simTime);
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
 
@@ -474,7 +460,7 @@ main(int argc, char* argv[])
     Simulator::Schedule(Seconds(0.3), &E2AP::SendE2SetupRequest, &e2n3);
 
     // UE 위치 트래커
-    /*std::ofstream ueTrajCsv("ue_trajectory.csv");
+    std::ofstream ueTrajCsv("ue_trajectory.csv");
     ueTrajCsv << "time_s,ueIndex,x,y,servingCellId" << std::endl;
     ueTrajCsv.close();
 
@@ -496,7 +482,7 @@ main(int argc, char* argv[])
             }
             csv.close();
         });
-    }*/
+    }
 
     Simulator::Schedule(Seconds(simTime - 1.0), [&sonxapp]() {
         sonxapp.SaveModels();

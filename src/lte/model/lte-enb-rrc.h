@@ -1878,10 +1878,13 @@ class LteEnbRrc : public Object
     std::map<uint8_t, Ptr<ComponentCarrierBaseStation>>
         m_componentCarrierPhyConf; ///< component carrier phy configuration
     Ptr<Node> m_node;
-    std::map<uint16_t, uint64_t> m_prevPublishDlBytes;
-    std::map<uint16_t, uint64_t> m_prevPublishUlBytes;
-    std::map<uint16_t, uint64_t> m_monotonicDlBytes;
-    std::map<uint16_t, uint64_t> m_monotonicUlBytes;
+    std::map<uint16_t, uint64_t> m_prevPublishDlBytes;   // unused (legacy)
+    std::map<uint16_t, uint64_t> m_prevPublishUlBytes;  // unused (legacy)
+    std::map<uint16_t, uint64_t> m_monotonicDlBytes;    // per-cell cumulative DL
+    std::map<uint16_t, uint64_t> m_monotonicUlBytes;    // per-cell cumulative UL
+    // per-UE byte tracking (rnti → prev cumulative bytes)
+    std::map<uint16_t, uint64_t> m_prevUeDlBytes;
+    std::map<uint16_t, uint64_t> m_prevUeUlBytes;
   public:
     void SetNode(Ptr<Node>);
     Ptr<Node> GetNode();

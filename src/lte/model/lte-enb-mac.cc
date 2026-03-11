@@ -785,6 +785,7 @@ LteEnbMac::DoReceivePhyPdu(Ptr<Packet> p)
     // Receive PDU only if LCID is found
     if (lcidIt != rntiIt->second.end())
     {
+        m_cellUlBytes += p->GetSize();
         (*lcidIt).second->ReceivePdu(rxPduParams);
     }
 }
@@ -1065,6 +1066,7 @@ LteEnbMac::DoTransmitPdu(LteMacSapProvider::TransmitPduParameters params)
 
     //(*it).second.at (params.layer).at (params.harqProcessId) = params.pdu;//->Copy ();
     (*it).second.at(params.layer).at(params.harqProcessId)->AddPacket(params.pdu);
+    m_cellDlBytes += params.pdu->GetSize();
     m_enbPhySapProvider->SendMacPdu(params.pdu);
 }
 

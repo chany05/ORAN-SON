@@ -102,6 +102,30 @@ build_lib_example(
         ${libinternet}
 )
 build_lib_example(
+        NAME TestThpSaturation
+        SOURCE_FILES TestThpSaturation.cc
+        LIBRARIES_TO_LINK
+        ${libcore}
+        ${libmobility}
+        ${libpoint-to-point}
+        ${liblte}
+        ${liboran}
+        ${libapplications}
+        ${libinternet}
+)
+build_lib_example(
+        NAME TestCioLatency
+        SOURCE_FILES TestCioLatency.cc
+        LIBRARIES_TO_LINK
+        ${libcore}
+        ${libmobility}
+        ${libpoint-to-point}
+        ${liblte}
+        ${liboran}
+        ${libapplications}
+        ${libinternet}
+)
+build_lib_example(
         NAME TestHandoverSONXapp
         SOURCE_FILES TestHandoverSONXapp.cc
         LIBRARIES_TO_LINK

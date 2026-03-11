@@ -725,6 +725,13 @@ xAppHandoverSON::InitMADDPG()
     {
         LoadModels();
     }
+
+    // Inference: Actor를 eval 모드로 전환 (RunningMeanStd가 running stats 사용)
+    if (m_inferenceOnly)
+    {
+        for (auto& agent : m_agents)
+            agent->GetActor()->eval();
+    }
 }
 
 // =============================================================================
@@ -798,20 +805,11 @@ xAppHandoverSON::ComputeRewards()
         prbUtils.push_back(cit != m_cellContexts.end() ? cit->second.prbUtilDl : 0.0);
     }
 
-    // Reward: total throughput (sum of all cells, normalized)
+    // Reward: total throughput (normalized) - UE std penalty
     double totalThp = std::accumulate(thps.begin(), thps.end(), 0.0);
-    double normalizedReward = totalThp / 1e4;  // scale to ~1-5 range
-    std::vector<double> rewards;
-    for (size_t i = 0; i < thps.size(); i++)
-    {
-        rewards.push_back(normalizedReward);
-    }
+    double normalizedThp = totalThp / 2e4;  // scale to ~0-1 range
 
-    // For logging only
-    double meanPrb = std::accumulate(prbUtils.begin(), prbUtils.end(), 0.0) / prbUtils.size();
-    double prbVar = 0.0;
-    for (double p : prbUtils) prbVar += (p - meanPrb) * (p - meanPrb);
-    double stdPrb = std::sqrt(prbVar / prbUtils.size());
+    // UE std penalty: penalize uneven UE distribution across cells
     double stdUeNorm = 0.0;
     if (totalUEs > 0) {
         double meanUe = totalUEs / ueCounts.size();
@@ -819,6 +817,21 @@ xAppHandoverSON::ComputeRewards()
         for (double u : ueCounts) ueVar += (u - meanUe) * (u - meanUe);
         stdUeNorm = std::sqrt(ueVar / ueCounts.size()) / totalUEs;
     }
+
+    constexpr double UE_STD_PENALTY = 0.5;
+    double normalizedReward = normalizedThp - UE_STD_PENALTY * stdUeNorm;
+
+    std::vector<double> rewards;
+    for (size_t i = 0; i < thps.size(); i++)
+    {
+        rewards.push_back(normalizedReward);
+    }
+
+    // For logging
+    double meanPrb = std::accumulate(prbUtils.begin(), prbUtils.end(), 0.0) / prbUtils.size();
+    double prbVar = 0.0;
+    for (double p : prbUtils) prbVar += (p - meanPrb) * (p - meanPrb);
+    double stdPrb = std::sqrt(prbVar / prbUtils.size());
 
     {
         double now = Simulator::Now().GetSeconds();
@@ -1006,10 +1019,11 @@ xAppHandoverSON::TrainMADDPG()
 {
     NS_LOG_FUNCTION(this);
 
-    if (m_replayBuffer->Size() < BATCH_SIZE)
+    static constexpr size_t WARMUP_STEPS = 200;
+    if (m_replayBuffer->Size() < WARMUP_STEPS)
     {
         NS_LOG_UNCOND("[MADDPG] Warmup: " << m_replayBuffer->Size()
-            << "/" << BATCH_SIZE);
+            << "/" << WARMUP_STEPS);
         return;
     }
 
@@ -1089,7 +1103,7 @@ xAppHandoverSON::TrainMADDPG()
         }
         auto allPolicyActs = torch::cat(policyActs, 1);
 
-        constexpr float ACT_REG = 0.1f;
+        constexpr float ACT_REG = 0.01f;
         auto actorLoss = (-agent->GetCritic()->forward(allObs.detach(), allPolicyActs)
                          + ACT_REG * (currAct * currAct).sum(-1, /*keepdim=*/true)).mean();
 
@@ -1106,13 +1120,87 @@ xAppHandoverSON::TrainMADDPG()
             float curActorLoss  = actorLoss.item<float>();
             float curCriticLoss = criticLoss.item<float>();
 
+            // ── Gradient Norm ──
+            double actorGradNorm = 0.0, criticGradNorm = 0.0;
+            for (auto& p : agent->GetActor()->parameters())
+                if (p.grad().defined()) actorGradNorm += p.grad().norm().item<double>();
+            for (auto& p : agent->GetCritic()->parameters())
+                if (p.grad().defined()) criticGradNorm += p.grad().norm().item<double>();
+
+            // ── Weight Norm (magnitude) ──
+            double actorWeightNorm = 0.0, criticWeightNorm = 0.0;
+            for (auto& p : agent->GetActor()->parameters())
+                actorWeightNorm += p.norm().item<double>();
+            for (auto& p : agent->GetCritic()->parameters())
+                criticWeightNorm += p.norm().item<double>();
+
+            // ── Action Distribution: mean, std, saturation ratio (|a|>0.95) ──
+            float actMean = currAct.mean().item<float>();
+            float actStd  = currAct.std().item<float>();
+            float satRatio = (currAct.abs() > 0.95).to(torch::kFloat).mean().item<float>();
+
             std::cout << "[MADDPG Train] Step=" << m_stepCount
                       << " | Agent=" << i
                       << " | CriticLoss=" << curCriticLoss
                       << " | ActorLoss=" << curActorLoss
                       << " | Epsilon=" << m_epsilon
+                      << " | GradA=" << actorGradNorm
+                      << " | GradC=" << criticGradNorm
+                      << " | SatR=" << satRatio
+                      << std::endl;
+
+            // ── CSV 로깅 ──
+            std::ostringstream oss;
+            oss << Simulator::Now().GetSeconds()
+                << "," << m_stepCount << "," << i
+                << "," << curActorLoss << "," << curCriticLoss
+                << "," << actorGradNorm << "," << criticGradNorm
+                << "," << actorWeightNorm << "," << criticWeightNorm
+                << "," << actMean << "," << actStd << "," << satRatio;
+            m_trainDiagBuf.push_back(oss.str());
+        }
+    }
+
+    // ── 500스텝마다 고착화 체크 ──
+    if (m_stepCount % 500 == 0)
+    {
+        std::cout << "\n===== [STAGNATION CHECK] Step=" << m_stepCount << " =====" << std::endl;
+        for (size_t i = 0; i < m_agents.size(); i++)
+        {
+            auto actor = m_agents[i]->GetActor();
+
+            // Weight norm
+            double wNorm = 0.0;
+            for (auto& p : actor->parameters()) wNorm += p.norm().item<double>();
+
+            // Weight 변화량: 현재 vs target
+            double targetDiff = 0.0;
+            auto tgtActor = m_agents[i]->GetTargetActor();
+            auto srcParams = actor->parameters();
+            auto tgtParams = tgtActor->parameters();
+            auto srcIt = srcParams.begin();
+            auto tgtIt = tgtParams.begin();
+            for (; srcIt != srcParams.end() && tgtIt != tgtParams.end(); ++srcIt, ++tgtIt)
+                targetDiff += (*srcIt - *tgtIt).abs().mean().item<double>();
+
+            // 테스트 행동 분포
+            auto testObs = BuildObservation(m_agents[i]->GetConfig().cellId);
+            actor->eval();
+            auto testAct = actor->forward(testObs.unsqueeze(0)).squeeze(0);
+            actor->train();
+            float actMean = testAct.mean().item<float>();
+            float actStd = testAct.std().item<float>();
+            float satRatio = (testAct.abs() > 0.95).to(torch::kFloat).mean().item<float>();
+
+            std::cout << "  Agent" << i
+                      << " | wNorm=" << wNorm
+                      << " | tgtDiff=" << targetDiff
+                      << " | actMean=" << actMean
+                      << " | actStd=" << actStd
+                      << " | satR=" << satRatio
                       << std::endl;
         }
+        std::cout << "=========================================\n" << std::endl;
     }
 }
 
@@ -1207,13 +1295,16 @@ xAppHandoverSON::LoadModels(const std::string& dir)
 void
 xAppHandoverSON::InitCsvLoggers()
 {
-    if (!(m_loadPretrained | m_inferenceOnly))
+    // EP1 학습 시작(loadPretrained=false, inference=false)만 헤더+덮어쓰기
+    // 그 외(EP2+, inference)는 헤더 없이 append
+    if (!m_loadPretrained && !m_inferenceOnly)
     {
         m_cellMetricsBuf.push_back("time_s,cellId,ueCount,edgeUeCount,cellDlThp_kbps,cellUlThp_kbps,avgCqi,txPower_dBm,prbUtilDl");
         m_cioActionsBuf.push_back("time_s,srcCellId,neighborCellId,cioDB,cioIE");
         m_maddpgActionsBuf.push_back("time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps,alpha");
         m_rewardCurveBuf.push_back("time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std,ue_std");
         m_stagnationBuf.push_back("time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant");
+        m_trainDiagBuf.push_back("time_s,step,agent,actor_loss,critic_loss,actor_grad_norm,critic_grad_norm,actor_weight_norm,critic_weight_norm,act_mean,act_std,sat_ratio");
     }
 }
 
@@ -1260,6 +1351,7 @@ xAppHandoverSON::FlushCsvLogs()
     writeFile("cio_actions.csv",      m_cioActionsBuf,      append);
     writeFile("maddpg_actions.csv",   m_maddpgActionsBuf,   append);
     writeFile("reward_curve.csv",     m_rewardCurveBuf,     append);
+    writeFile("train_diag.csv",      m_trainDiagBuf,       append);
     writeFile("stagnation_check.csv", m_stagnationBuf,      append);
 
     NS_LOG_UNCOND("[MADDPG] CSV logs flushed ("

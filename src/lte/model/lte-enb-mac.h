@@ -76,6 +76,9 @@ class LteEnbMac : public Object
     uint64_t GetDlRbUsed() const { return m_dlRbUsed; }
     void ResetPrbCounters() { m_dlRbUsed = 0; m_dlSubframeCount = 0; }
     uint64_t GetDlSubframeCount() const { return m_dlSubframeCount; }
+    // Cell-level cumulative byte counters (UE-independent)
+    uint64_t GetCellDlBytes() const { return m_cellDlBytes; }
+    uint64_t GetCellUlBytes() const { return m_cellUlBytes; }
     LteEnbMac();
     ~LteEnbMac() override;
     void DoDispose() override;
@@ -208,9 +211,9 @@ class LteEnbMac : public Object
     void ReceiveDlCqiLteControlMessage(Ptr<DlCqiLteControlMessage> msg);
 
     uint64_t m_dlRbUsed = 0;
-    // 기존 GetDlRbUsed() 유지하고 추가:
-
     uint64_t m_dlSubframeCount = 0;
+    uint64_t m_cellDlBytes = 0;  // cell-level cumulative DL bytes
+    uint64_t m_cellUlBytes = 0;  // cell-level cumulative UL bytes
 
     
     /**

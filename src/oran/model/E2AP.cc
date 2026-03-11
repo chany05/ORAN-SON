@@ -531,7 +531,7 @@ E2AP::RemoveEndpoint(std::string endpoint)
 void
 E2AP::SubscribeToEndpoint(std::string endpoint)
 {
-    SubscribeToEndpointPeriodic(endpoint, 1000);
+    SubscribeToEndpointPeriodic(endpoint, 500);
 }
 
 void
@@ -824,7 +824,7 @@ E2AP::HandleE2SetupRequest(std::string& src_endpoint, Json& payload)
                     for (auto& kpmName : ranFunc["ENDPOINTS"])
                     {
                         std::string endpoint = src_endpoint + "/KPM/" + kpmName.get<std::string>();
-                        SubscribeToEndpointPeriodic(endpoint, 1000);
+                        SubscribeToEndpointPeriodic(endpoint, 500);
                     }
                 }
                 acceptedList.push_back(funcId);

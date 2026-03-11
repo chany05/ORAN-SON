@@ -22,7 +22,7 @@ xAppHandoverSON_MASAC::xAppHandoverSON_MASAC(float sonPeriodicitySec, bool initi
     : xAppHandover(),
       m_sonPeriodicitySec(sonPeriodicitySec),
       m_initiateHandovers(initiateHandovers),
-      m_edgeRsrpThreshold(-85.28),
+      m_edgeRsrpThreshold(-79.26),
       m_loadThreshold(12.0),
       m_rsrqThreshold(-15.0),
       m_cqiThreshold(11),
@@ -408,12 +408,16 @@ xAppHandoverSON_MASAC::CollectCellThroughput()
 
     for (auto& [cellId, cell] : m_cellContexts)
     {
-        double dlDelta = cell.totalThroughputDl;
-        double ulDelta = cell.totalThroughputUl;
-        if (dlDelta > 0 || ulDelta > 0)
+        if (cell.totalThroughputDl > 0 || cell.totalThroughputUl > 0)
         {
             cell.totalThroughputDl = (cell.totalThroughputDl * 8.0) / 1000.0 / m_sonPeriodicitySec;
             cell.totalThroughputUl = (cell.totalThroughputUl * 8.0) / 1000.0 / m_sonPeriodicitySec;
+
+            std::cout << "[IpVol] Cell" << cellId
+                << " DL=" << (cell.totalThroughputDl / 1e3) << "Mbps"
+                << " UL=" << (cell.totalThroughputUl / 1e3) << "Mbps"
+                << " UEs=" << cell.ueCount << std::endl;
+
             m_lastThroughputDl[cellId] = cell.totalThroughputDl;
             m_lastThroughputUl[cellId] = cell.totalThroughputUl;
         }
@@ -622,14 +626,14 @@ xAppHandoverSON_MASAC::InitMASAC()
     m_neighborMap[3] = {1, 2};
 
     int64_t totalObsDim = NUM_AGENTS * OBS_DIM;
-    int64_t totalActDim = NUM_AGENTS * 1;  // each agent: [CIO_self]
+    int64_t totalActDim = NUM_AGENTS * 2;  // each agent: [CIO_self, TXP]
 
     for (auto cellId : m_cellIds)
     {
         AgentConfig_MASAC config;
         config.cellId = cellId;
         config.obsDim = OBS_DIM;
-        config.actDim = 1;  // [CIO_self] (TXP removed)
+        config.actDim = 2;  // [CIO_self, TXP]
         config.neighborCellIds = m_neighborMap[cellId];
 
         m_agents.push_back(std::make_unique<MASACAgent>(
@@ -719,19 +723,11 @@ xAppHandoverSON_MASAC::ComputeRewards()
         prbUtils.push_back(cit != m_cellContexts.end() ? cit->second.prbUtilDl : 0.0);
     }
 
-    // Reward: per-UE throughput
-    std::vector<double> rewards;
-    for (size_t i = 0; i < thps.size(); i++)
-    {
-        double perUeThp = (ueCounts[i] > 0) ? thps[i] / ueCounts[i] : 0.0;
-        rewards.push_back(perUeThp);
-    }
+    // Reward: total throughput (normalized) - UE std penalty
+    double totalThp = std::accumulate(thps.begin(), thps.end(), 0.0);
+    double normalizedThp = totalThp / 2e4;  // scale to ~0-1 range
 
-    // For logging only
-    double meanPrb = std::accumulate(prbUtils.begin(), prbUtils.end(), 0.0) / prbUtils.size();
-    double prbVar = 0.0;
-    for (double p : prbUtils) prbVar += (p - meanPrb) * (p - meanPrb);
-    double stdPrb = std::sqrt(prbVar / prbUtils.size());
+    // UE std penalty: penalize uneven UE distribution across cells
     double stdUeNorm = 0.0;
     if (totalUEs > 0) {
         double meanUe = totalUEs / ueCounts.size();
@@ -739,6 +735,21 @@ xAppHandoverSON_MASAC::ComputeRewards()
         for (double u : ueCounts) ueVar += (u - meanUe) * (u - meanUe);
         stdUeNorm = std::sqrt(ueVar / ueCounts.size()) / totalUEs;
     }
+
+    constexpr double UE_STD_PENALTY = 0.5;
+    double normalizedReward = normalizedThp - UE_STD_PENALTY * stdUeNorm;
+
+    std::vector<double> rewards;
+    for (size_t i = 0; i < thps.size(); i++)
+    {
+        rewards.push_back(normalizedReward);
+    }
+
+    // For logging
+    double meanPrb = std::accumulate(prbUtils.begin(), prbUtils.end(), 0.0) / prbUtils.size();
+    double prbVar = 0.0;
+    for (double p : prbUtils) prbVar += (p - meanPrb) * (p - meanPrb);
+    double stdPrb = std::sqrt(prbVar / prbUtils.size());
 
     {
         double now = Simulator::Now().GetSeconds();
@@ -918,15 +929,24 @@ xAppHandoverSON_MASAC::StepMASAC()
         auto actData = act.accessor<float, 1>();
         const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
 
-        // ── Per-cell CIO: action[0] = self CIO (no TXP) ──
+        // ── action[0] = self CIO, action[1] = TXP ──
         int selfCioDB = std::max(-5, std::min(5,
             static_cast<int>(std::round(actData[0] * 5.0))));
         m_cellCio[srcCell] = selfCioDB;
 
+        double txpOffset = static_cast<double>(actData[1]) * 4.0;
+        double txpApplied = m_txPower + txpOffset;
+        txpApplied = std::max(26.0, std::min(38.0, txpApplied));
+
+        // TXP 적용
+        std::string txpEp = "/E2Node/" + std::to_string(srcCell) + "/";
+        ric->E2SmRcSendTxPowerControlRequest(txpApplied, txpEp);
+
         // ── 콘솔 로그 ──
         std::cout << "[ACT-MASAC] Step=" << m_stepCount
             << " Cell" << srcCell << " selfCIO=" << selfCioDB
-            << "dB raw=[" << actData[0] << "]" << std::endl;
+            << "dB TXP=" << txpApplied << "dBm raw=[" << actData[0]
+            << "," << actData[1] << "]" << std::endl;
 
         // ── CSV logging (every 5 steps) ──
         if (m_stepCount % 5 == 0)
@@ -940,8 +960,8 @@ xAppHandoverSON_MASAC::StepMASAC()
             double alpha_val = m_agents[i]->GetLogAlpha().exp().item<double>();
             std::ostringstream oss;
             oss << now << "," << srcCell
-                << "," << actData[0] << ",0"
-                << "," << selfCioDB << "," << m_txPower
+                << "," << actData[0] << "," << actData[1]
+                << "," << selfCioDB << "," << txpApplied
                 << "," << cellThp << "," << alpha_val;
             m_maddpgActionsBuf.push_back(oss.str());
         }
@@ -1003,10 +1023,11 @@ xAppHandoverSON_MASAC::TrainMASAC()
 {
     NS_LOG_FUNCTION(this);
 
-    if (m_replayBuffer->Size() < BATCH_SIZE)
+    static constexpr size_t WARMUP_STEPS = 200;
+    if (m_replayBuffer->Size() < WARMUP_STEPS)
     {
         NS_LOG_UNCOND("[MASAC] Warmup: " << m_replayBuffer->Size()
-            << "/" << BATCH_SIZE);
+            << "/" << WARMUP_STEPS);
         return;
     }
 
@@ -1099,7 +1120,7 @@ xAppHandoverSON_MASAC::TrainMASAC()
 
         agent->GetActorOpt().zero_grad();
         actorLoss.backward();
-        torch::nn::utils::clip_grad_norm_(agent->GetActor()->parameters(), 0.5);
+        torch::nn::utils::clip_grad_norm_(agent->GetActor()->parameters(), 1.0);
         agent->GetActorOpt().step();
 
         // ─ Alpha 업데이트 ─
@@ -1225,7 +1246,7 @@ xAppHandoverSON_MASAC::InitCsvLoggers()
         m_cellMetricsBuf.push_back("time_s,cellId,ueCount,edgeUeCount,cellDlThp_kbps,cellUlThp_kbps,avgCqi,txPower_dBm,prbUtilDl");
         m_cioActionsBuf.push_back("time_s,srcCellId,neighborCellId,cioDB,cioIE");
         m_maddpgActionsBuf.push_back("time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps,alpha");
-        m_rewardCurveBuf.push_back("time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std");
+        m_rewardCurveBuf.push_back("time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std,ue_std");
         m_stagnationBuf.push_back("time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant");
     }
 }

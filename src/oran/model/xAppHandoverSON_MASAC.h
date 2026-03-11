@@ -44,22 +44,62 @@ struct CellContext_MASAC
 
 // ─── MASAC 컴포넌트 ────────────
 
-// SACActorNet: Gaussian policy with tanh squashing
-// 출력: fc_mean(128→actDim), fc_logstd(128→actDim) (2개 head)
+// ─── RunningMeanStd: EMA 기반 observation 정규화 ─────────────
+struct RunningMeanStd_MASAC : torch::nn::Module
+{
+    RunningMeanStd_MASAC(int64_t dim, double alpha = 0.01)
+        : m_alpha(alpha)
+    {
+        m_mean = register_buffer("running_mean", torch::zeros({dim}));
+        m_var  = register_buffer("running_var",  torch::ones({dim}));
+        m_count = register_buffer("count", torch::zeros({1}));
+    }
+
+    torch::Tensor normalize(torch::Tensor x)
+    {
+        if (is_training() && x.size(0) > 1)
+        {
+            auto batchMean = x.mean(0);
+            auto batchVar  = x.var(0, /*unbiased=*/false);
+            m_mean = (1.0 - m_alpha) * m_mean + m_alpha * batchMean.detach();
+            m_var  = (1.0 - m_alpha) * m_var  + m_alpha * batchVar.detach();
+            m_count += 1;
+        }
+        return (x - m_mean) / (m_var.sqrt() + 1e-8);
+    }
+
+    double m_alpha;
+    torch::Tensor m_mean, m_var, m_count;
+};
+
+// SACActorNet: Gaussian policy with tanh squashing + obs normalization
 struct SACActorNetImpl : torch::nn::Module
 {
     SACActorNetImpl(int64_t obsDim, int64_t actDim)
     {
+        obsNorm = register_module("obs_norm", std::make_shared<RunningMeanStd_MASAC>(obsDim));
         fc1 = register_module("fc1", torch::nn::Linear(obsDim, 64));
         fc2 = register_module("fc2", torch::nn::Linear(64, 64));
         fc_mean   = register_module("fc_mean",   torch::nn::Linear(64, actDim));
         fc_logstd = register_module("fc_logstd", torch::nn::Linear(64, actDim));
+
+        // He initialization for hidden layers
+        torch::nn::init::kaiming_uniform_(fc1->weight, std::sqrt(5));
+        torch::nn::init::zeros_(fc1->bias);
+        torch::nn::init::kaiming_uniform_(fc2->weight, std::sqrt(5));
+        torch::nn::init::zeros_(fc2->bias);
+        // Output heads: large init so μ starts far from 0
+        torch::nn::init::uniform_(fc_mean->weight, -0.5, 0.5);
+        torch::nn::init::uniform_(fc_mean->bias, -0.2, 0.2);
+        torch::nn::init::uniform_(fc_logstd->weight, -3e-3, 3e-3);
+        torch::nn::init::uniform_(fc_logstd->bias, -3e-3, 3e-3);
     }
 
     // Stochastic: reparameterization trick a = tanh(μ + σ*ε)
     std::pair<torch::Tensor, torch::Tensor> sample(torch::Tensor obs)
     {
-        auto x = torch::leaky_relu(fc1->forward(obs));
+        auto x = obsNorm->normalize(obs);
+        x = torch::leaky_relu(fc1->forward(x));
         x = torch::leaky_relu(fc2->forward(x));
         auto mu = fc_mean->forward(x);
         auto log_std = torch::clamp(fc_logstd->forward(x), -20.0, 2.0);
@@ -81,13 +121,15 @@ struct SACActorNetImpl : torch::nn::Module
     // Deterministic: tanh(μ)
     torch::Tensor deterministic(torch::Tensor obs)
     {
-        auto x = torch::leaky_relu(fc1->forward(obs));
+        auto x = obsNorm->normalize(obs);
+        x = torch::leaky_relu(fc1->forward(x));
         x = torch::leaky_relu(fc2->forward(x));
         return torch::tanh(fc_mean->forward(x));
     }
 
     torch::Tensor forward(torch::Tensor obs) { return deterministic(obs); }
 
+    std::shared_ptr<RunningMeanStd_MASAC> obsNorm{nullptr};
     torch::nn::Linear fc1{nullptr}, fc2{nullptr}, fc_mean{nullptr}, fc_logstd{nullptr};
 };
 TORCH_MODULE(SACActorNet);
@@ -105,6 +147,17 @@ struct TwinCriticNetImpl : torch::nn::Module
         q2_fc1 = register_module("q2_fc1", torch::nn::Linear(totalStateDim + totalActDim, 64));
         q2_fc2 = register_module("q2_fc2", torch::nn::Linear(64, 64));
         q2_fc3 = register_module("q2_fc3", torch::nn::Linear(64, 1));
+
+        // He initialization
+        for (auto* layer : {&q1_fc1, &q1_fc2, &q2_fc1, &q2_fc2}) {
+            torch::nn::init::kaiming_uniform_((*layer)->weight, std::sqrt(5));
+            torch::nn::init::zeros_((*layer)->bias);
+        }
+        // Small init for output layers
+        for (auto* layer : {&q1_fc3, &q2_fc3}) {
+            torch::nn::init::uniform_((*layer)->weight, -3e-3, 3e-3);
+            torch::nn::init::uniform_((*layer)->bias, -3e-3, 3e-3);
+        }
     }
 
     std::pair<torch::Tensor, torch::Tensor> forward(torch::Tensor state, torch::Tensor action)
@@ -212,9 +265,9 @@ class MASACAgent
   public:
     MASACAgent(const AgentConfig_MASAC& config,
                int64_t totalObsDim, int64_t totalActDim,
-               double actorLr = 1e-4, double criticLr = 3e-4)
+               double actorLr = 7e-5, double criticLr = 1e-4)
         : m_config(config),
-          m_targetEntropy(-static_cast<double>(config.actDim))
+          m_targetEntropy(-1.0)  // -actDim/2 for 2D action space
     {
         m_actor = SACActorNet(config.obsDim, config.actDim);
         m_critic = TwinCriticNet(totalObsDim, totalActDim);
@@ -228,8 +281,8 @@ class MASACAgent
         m_criticOpt = std::make_shared<torch::optim::Adam>(
             m_critic->parameters(), torch::optim::AdamOptions(criticLr));
 
-        // Entropy temperature α (learnable log-scale)
-        m_logAlpha = torch::zeros({1}, torch::requires_grad(true));
+        // Entropy temperature α (start very small to avoid μ→0 collapse)
+        m_logAlpha = torch::full({1}, -2.0, torch::requires_grad(true));
         m_alphaOpt = std::make_shared<torch::optim::Adam>(
             std::vector<torch::Tensor>{m_logAlpha}, torch::optim::AdamOptions(3e-4));
     }
@@ -237,8 +290,12 @@ class MASACAgent
     torch::Tensor SelectAction(torch::Tensor obs, bool deterministic = true)
     {
         torch::NoGradGuard noGrad;
-        if (deterministic)
-            return m_actor->deterministic(obs);
+        if (deterministic) {
+            m_actor->eval();
+            auto act = m_actor->deterministic(obs);
+            m_actor->train();
+            return act;
+        }
         auto [action, log_prob] = m_actor->sample(obs);
         return action;
     }
@@ -390,7 +447,7 @@ private:
     static constexpr size_t BATCH_SIZE   = 64;
     static constexpr double GAMMA        = 0.99;
     static constexpr double TAU_SOFT     = 0.005;
-    static constexpr double ACTOR_LR     = 1e-4;
+    static constexpr double ACTOR_LR     = 3e-4;
     static constexpr double CRITIC_LR    = 3e-4;
     static constexpr int    N_STEP       = 3;
 

@@ -40,37 +40,66 @@ struct CellContext
     double txPower;
 };
 
-// ─── MADDPG + Tanh Actor (BatchNorm + Xavier init) ────────────
-// Actor: state → BN → ReLU → BN → ReLU → small_init → tanh → action ∈ [-1, +1]
+// ─── RunningMeanStd: EMA 기반 observation 정규화 ─────────────
+struct RunningMeanStd : torch::nn::Module
+{
+    RunningMeanStd(int64_t dim, double alpha = 0.01)
+        : m_alpha(alpha)
+    {
+        // register_buffer: 학습 파라미터가 아님, 저장/로드는 됨
+        m_mean = register_buffer("running_mean", torch::zeros({dim}));
+        m_var  = register_buffer("running_var",  torch::ones({dim}));
+        m_count = register_buffer("count", torch::zeros({1}));
+    }
+
+    torch::Tensor normalize(torch::Tensor x)
+    {
+        if (is_training() && x.size(0) > 1)
+        {
+            auto batchMean = x.mean(0);
+            auto batchVar  = x.var(0, /*unbiased=*/false);
+            m_mean = (1.0 - m_alpha) * m_mean + m_alpha * batchMean.detach();
+            m_var  = (1.0 - m_alpha) * m_var  + m_alpha * batchVar.detach();
+            m_count += 1;
+        }
+        return (x - m_mean) / (m_var.sqrt() + 1e-8);
+    }
+
+    double m_alpha;
+    torch::Tensor m_mean, m_var, m_count;
+};
+
+// ─── MADDPG + Tanh Actor (RunningMeanStd + LeakyReLU) ────────────
+// Actor: obs → RunningMeanStd → LeakyReLU → LeakyReLU → tanh → action ∈ [-1, +1]
 struct ActorNetImpl : torch::nn::Module
 {
     ActorNetImpl(int64_t obsDim, int64_t actDim, double /*maxAction*/ = 1.0)
     {
+        obsNorm = register_module("obs_norm", std::make_shared<RunningMeanStd>(obsDim));
         fc1 = register_module("fc1", torch::nn::Linear(obsDim, 256));
-        bn1 = register_module("bn1", torch::nn::BatchNorm1d(256));
         fc2 = register_module("fc2", torch::nn::Linear(256, 256));
-        bn2 = register_module("bn2", torch::nn::BatchNorm1d(256));
         fc3 = register_module("fc3", torch::nn::Linear(256, actDim));
 
-        // He initialization for hidden layers (ReLU)
+        // He initialization for hidden layers
         torch::nn::init::kaiming_uniform_(fc1->weight, std::sqrt(5));
         torch::nn::init::zeros_(fc1->bias);
         torch::nn::init::kaiming_uniform_(fc2->weight, std::sqrt(5));
         torch::nn::init::zeros_(fc2->bias);
-        // Small init for output layer (prevent tanh saturation)
-        torch::nn::init::uniform_(fc3->weight, -3e-3, 3e-3);
-        torch::nn::init::uniform_(fc3->bias, -3e-3, 3e-3);
+        // Larger init for output layer so actions start non-trivial
+        torch::nn::init::uniform_(fc3->weight, -0.3, 0.3);
+        torch::nn::init::uniform_(fc3->bias, -0.1, 0.1);
     }
 
     torch::Tensor forward(torch::Tensor obs)
     {
-        auto x = torch::relu(bn1->forward(fc1->forward(obs)));
-        x = torch::relu(bn2->forward(fc2->forward(x)));
+        auto x = obsNorm->normalize(obs);
+        x = torch::leaky_relu(fc1->forward(x), 0.01);
+        x = torch::leaky_relu(fc2->forward(x), 0.01);
         return torch::tanh(fc3->forward(x));
     }
 
+    std::shared_ptr<RunningMeanStd> obsNorm{nullptr};
     torch::nn::Linear fc1{nullptr}, fc2{nullptr}, fc3{nullptr};
-    torch::nn::BatchNorm1d bn1{nullptr}, bn2{nullptr};
 };
 TORCH_MODULE(ActorNet);
 
@@ -345,6 +374,7 @@ class xAppHandoverSON : public xAppHandover
     std::vector<std::string> m_maddpgActionsBuf;
     std::vector<std::string> m_rewardCurveBuf;
     std::vector<std::string> m_stagnationBuf;
+    std::vector<std::string> m_trainDiagBuf;   // gradient/weight/activation diagnostics
 public:
     void FlushCsvLogs();
 private:
@@ -360,7 +390,7 @@ private:
     static constexpr int    ACT_DIM      = 2;       // [CIO, TXP] Python과 동일
     static constexpr double MAX_ACTION   = 1.0;
     static constexpr size_t BUFFER_SIZE  = 100000;   // Python: 1e6
-    static constexpr size_t BATCH_SIZE   = 256;      // Python과 동일
+    static constexpr size_t BATCH_SIZE   = 64;
     static constexpr double GAMMA        = 0.99;
     static constexpr double TAU_SOFT     = 0.005;
     static constexpr double ACTOR_LR     = 3e-4;    // Python과 동일

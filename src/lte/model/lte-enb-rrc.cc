@@ -1623,53 +1623,15 @@ LteEnbRrc::PublishCellKpm()
                            << " | TxPower=" << txPower << "dBm");*/
             }
 
-            uint64_t cellDlBytes = 0;
-            uint64_t cellUlBytes = 0;
-
-            for (auto& [rnti, ueManager] : m_ueMap)
+            // ── MAC 셀 단위 바이트 카운터 (UE 이동에 무관) ──
+            auto ccEnbVol = DynamicCast<ComponentCarrierEnb>(m_componentCarrierPhyConf.at(0));
+            if (ccEnbVol)
             {
-                auto state = ueManager->GetState();
-                if (state != UeManager::CONNECTED_NORMALLY &&
-                    state != UeManager::CONNECTION_RECONFIGURATION)
-                    continue;
-
-                for (auto& [drbId, drbInfo] : ueManager->GetDrbMap())
-                {
-                    if (drbInfo && drbInfo->m_pdcp)
-                    {
-                        if (drbInfo->m_rlc)
-                        {
-                            cellDlBytes += drbInfo->m_rlc->GetTxBytes();
-                            cellUlBytes += drbInfo->m_rlc->GetRxBytes();
-                        }
-                    }
-                }
-            
-                        
+                Ptr<LteEnbMac> mac = ccEnbVol->GetMac();
+                m_monotonicDlBytes[cellId] = mac->GetCellDlBytes();
+                m_monotonicUlBytes[cellId] = mac->GetCellUlBytes();
             }
-            // ── monotonic DL/UL 카운터 ──
-            {
-                int64_t dlInterval = 0;
-                if (m_prevPublishDlBytes.count(cellId))
-                    dlInterval = (int64_t)cellDlBytes - (int64_t)m_prevPublishDlBytes[cellId];
-                if (dlInterval < 0) dlInterval = 0;
-                m_prevPublishDlBytes[cellId] = cellDlBytes;
-                m_monotonicDlBytes[cellId] += (uint64_t)dlInterval;
 
-                int64_t ulInterval = 0;
-                if (m_prevPublishUlBytes.count(cellId))
-                    ulInterval = (int64_t)cellUlBytes - (int64_t)m_prevPublishUlBytes[cellId];
-                if (ulInterval < 0) ulInterval = 0;
-                m_prevPublishUlBytes[cellId] = cellUlBytes;
-                m_monotonicUlBytes[cellId] += (uint64_t)ulInterval;
-            }
-            /*
-            std::cout << "[KPM-RAW] Cell" << cellId 
-                << " cumDlBytes=" << cellDlBytes 
-                << " monoDl=" << m_monotonicDlBytes[cellId]
-                << " time=" << Simulator::Now().GetSeconds() 
-                << std::endl;
-            */
             Json volJson;
             volJson["CELLID"] = cellId;
 
@@ -2910,7 +2872,7 @@ LteEnbRrc::ConfigureCell(std::map<uint8_t, Ptr<ComponentCarrierBaseStation>> ccP
      * SystemInformationPeriodicity attribute to configure this).
      */
     Simulator::Schedule(MilliSeconds(16), &LteEnbRrc::SendSystemInformation, this);
-    Simulator::Schedule(Seconds(1.0), &LteEnbRrc::PublishCellKpm, this);
+    Simulator::Schedule(Seconds(0.5), &LteEnbRrc::PublishCellKpm, this);
     m_configured = true;
 }
 
