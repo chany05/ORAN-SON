@@ -230,7 +230,7 @@ main(int argc, char* argv[])
     std::cout << "=========================================" << std::endl;
 
     Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(20)));
-    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(2048));
+    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(512));
     Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(0));
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));

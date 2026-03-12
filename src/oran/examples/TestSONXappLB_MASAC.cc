@@ -228,8 +228,8 @@ main(int argc, char* argv[])
     std::cout << "  Saturate: " << (saturate ? "YES (Cell1 heavy)" : "NO") << std::endl;
     std::cout << "=================================" << std::endl;
 
-    Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(20)));
-    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(1024));
+    Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(1)));
+    Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(512));
     Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(0));
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
@@ -247,8 +247,8 @@ main(int argc, char* argv[])
     lteHelper->SetEnbAntennaModelType("ns3::IsotropicAntennaModel");
     lteHelper->SetEnbDeviceAttribute("DlEarfcn", UintegerValue(100));
     lteHelper->SetEnbDeviceAttribute("UlEarfcn", UintegerValue(18100));
-    lteHelper->SetEnbDeviceAttribute("DlBandwidth", UintegerValue(25));
-    lteHelper->SetEnbDeviceAttribute("UlBandwidth", UintegerValue(25));
+    lteHelper->SetEnbDeviceAttribute("DlBandwidth", UintegerValue(50));
+    lteHelper->SetEnbDeviceAttribute("UlBandwidth", UintegerValue(50));
 
     // A3 핸드오버 항상 활성 (saturate에서도 CIO로 부하분산 가능하게)
     lteHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
@@ -295,10 +295,9 @@ main(int argc, char* argv[])
 
     MobilityHelper ueMobility;
 
+    if (saturate)
     {
-        // ── 가우시안 UE 배치 ──
-        // 중심: eNB 삼각형 내부 (300~700, 400~750) 에서 랜덤
-        // saturate: σ=150m (집중), normal: σ=250m (균등에 가까움)
+        // ── saturate: 가우시안 UE 배치 (Cell1 근처 집중) ──
         Ptr<ListPositionAllocator> ueAlloc = CreateObject<ListPositionAllocator>();
         Ptr<UniformRandomVariable> uRng = CreateObject<UniformRandomVariable>();
         uRng->SetAttribute("Min", DoubleValue(0.0));
@@ -307,14 +306,12 @@ main(int argc, char* argv[])
         nRng->SetAttribute("Mean", DoubleValue(0.0));
         nRng->SetAttribute("Variance", DoubleValue(1.0));
 
-        // eNB 삼각형 무게중심(500, 500) 기준 ±200 범위 내 랜덤 중심
-        double cx = 400.0 + uRng->GetValue() * 200.0;  // 400~600
-        double cy = 400.0 + uRng->GetValue() * 200.0;  // 400~600
-        double sigma = saturate ? 150.0 : 300.0;
+        double cx = 450.0 + uRng->GetValue() * 100.0;
+        double cy = 450.0 + uRng->GetValue() * 100.0;
+        double sigma = 185.0;
 
         std::cout << "[UE-DIST] Gaussian center=(" << std::fixed << std::setprecision(0)
-                  << cx << "," << cy << ") σ=" << sigma << "m"
-                  << (saturate ? " (saturate)" : " (normal)") << std::endl;
+                  << cx << "," << cy << ") σ=" << sigma << "m (saturate)" << std::endl;
 
         for (uint16_t i = 0; i < numberOfUes; i++)
         {
@@ -325,6 +322,23 @@ main(int argc, char* argv[])
             ueAlloc->Add(Vector(x, y, 0));
         }
         ueMobility.SetPositionAllocator(ueAlloc);
+    }
+    else
+    {
+        // ── normal: 100~900 균등 랜덤 분포 ──
+        Ptr<RandomRectanglePositionAllocator> ueAlloc =
+            CreateObject<RandomRectanglePositionAllocator>();
+        Ptr<UniformRandomVariable> xVar = CreateObject<UniformRandomVariable>();
+        xVar->SetAttribute("Min", DoubleValue(100.0));
+        xVar->SetAttribute("Max", DoubleValue(900.0));
+        ueAlloc->SetX(xVar);
+        Ptr<UniformRandomVariable> yVar = CreateObject<UniformRandomVariable>();
+        yVar->SetAttribute("Min", DoubleValue(100.0));
+        yVar->SetAttribute("Max", DoubleValue(900.0));
+        ueAlloc->SetY(yVar);
+        ueMobility.SetPositionAllocator(ueAlloc);
+
+        std::cout << "[UE-DIST] Uniform random (100~900) (normal)" << std::endl;
     }
 
     ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
@@ -370,7 +384,7 @@ main(int argc, char* argv[])
             UdpClientHelper dlClientHelper(ueIpIfaces.GetAddress(u), dlPort);
             dlClientHelper.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
             dlClientHelper.SetAttribute("Interval", TimeValue(MilliSeconds(1)));
-            dlClientHelper.SetAttribute("PacketSize", UintegerValue(160));
+            dlClientHelper.SetAttribute("PacketSize", UintegerValue(512));
             clientApps.Add(dlClientHelper.Install(remoteHost));
             PacketSinkHelper dlPacketSinkHelper("ns3::UdpSocketFactory",
                                                 InetSocketAddress(Ipv4Address::GetAny(), dlPort));
@@ -379,7 +393,7 @@ main(int argc, char* argv[])
             UdpClientHelper ulClientHelper(remoteHostAddr, ulPort);
             ulClientHelper.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
             ulClientHelper.SetAttribute("Interval", TimeValue(MilliSeconds(1)));
-            ulClientHelper.SetAttribute("PacketSize", UintegerValue(160));
+            ulClientHelper.SetAttribute("PacketSize", UintegerValue(512));
             clientApps.Add(ulClientHelper.Install(ue));
             PacketSinkHelper ulPacketSinkHelper("ns3::UdpSocketFactory",
                                                 InetSocketAddress(Ipv4Address::GetAny(), ulPort));

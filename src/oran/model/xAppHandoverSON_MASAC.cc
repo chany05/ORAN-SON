@@ -738,7 +738,7 @@ xAppHandoverSON_MASAC::ComputeRewards()
     }
 
     constexpr double UE_STD_PENALTY = 0.5;
-    double normalizedReward = normalizedThp - UE_STD_PENALTY * stdUeNorm;
+    double normalizedReward = normalizedThp; // - UE_STD_PENALTY * stdUeNorm;
 
     std::vector<double> rewards;
     for (size_t i = 0; i < thps.size(); i++)
