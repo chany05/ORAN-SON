@@ -57,7 +57,9 @@ struct RunningMeanStd_MASAC : torch::nn::Module
 
     torch::Tensor normalize(torch::Tensor x)
     {
-        if (is_training() && x.size(0) > 1)
+        // Update running stats only for batched inputs shaped like [B, feat].
+        // Single observations arrive as [feat] during action selection.
+        if (is_training() && x.dim() >= 2 && x.size(0) > 1)
         {
             auto batchMean = x.mean(0);
             auto batchVar  = x.var(0, /*unbiased=*/false);
@@ -114,7 +116,6 @@ struct SACActorNetImpl : torch::nn::Module
         auto log_prob = -0.5 * (std::log(2.0 * M_PI) + 2.0 * log_std + eps * eps)
                        - torch::log(1.0 - action * action + 1e-3);
         log_prob = log_prob.sum(-1, /*keepdim=*/true);
-        log_prob = torch::clamp(log_prob, -20.0, 2.0);
 
         return {action, log_prob};
     }

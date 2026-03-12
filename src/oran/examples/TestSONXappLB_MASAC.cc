@@ -323,16 +323,16 @@ main(int argc, char* argv[])
     if (saturate)
     {
         // ── saturate: Cell1(상단) 근처 가우시안 집중 ──
-        double sigma = 120.0;
+        double sigma = 200.0;
         std::cout << "[UE-DIST] Gaussian near Cell1 (" << enbX[0] << "," << enbY[0]
                   << ") σ=" << sigma << "m (saturate)" << std::endl;
-
+        
         for (uint16_t i = 0; i < numberOfUes; i++)
         {
             double x, y;
             do {
-                x = enbX[0] + nRng->GetValue() * sigma;
-                y = enbY[0] + nRng->GetValue() * sigma;
+                x = areaCx + nRng->GetValue() * sigma;
+                y = areaCy + nRng->GetValue() * sigma;
             } while ((x - areaCx) * (x - areaCx) + (y - areaCy) * (y - areaCy)
                      > ueRadius * ueRadius);
             ueAlloc->Add(Vector(x, y, 0));

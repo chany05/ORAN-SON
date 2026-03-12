@@ -1253,7 +1253,7 @@ xAppHandoverSON_MASAC::InitCsvLoggers()
     {
         m_cellMetricsBuf.push_back("time_s,cellId,ueCount,edgeUeCount,cellDlThp_kbps,cellUlThp_kbps,avgCqi,txPower_dBm,prbUtilDl");
         m_cioActionsBuf.push_back("time_s,srcCellId,neighborCellId,cioDB,cioIE");
-        m_maddpgActionsBuf.push_back("time_s,cellId,cio_n1_raw,cio_n2_raw,txpRaw,cio_n1_dB,cio_n2_dB,txpApplied_dBm,cellThp_kbps,alpha");
+        m_maddpgActionsBuf.push_back("time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps,alpha");
         m_rewardCurveBuf.push_back("time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std,ue_std");
         m_stagnationBuf.push_back("time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant");
     }
