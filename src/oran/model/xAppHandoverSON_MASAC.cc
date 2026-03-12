@@ -627,14 +627,14 @@ xAppHandoverSON_MASAC::InitMASAC()
     m_neighborMap[3] = {1, 2};
 
     int64_t totalObsDim = NUM_AGENTS * OBS_DIM;
-    int64_t totalActDim = NUM_AGENTS * 3;  // each agent: [CIO_n1, CIO_n2, TXP]
+    int64_t totalActDim = NUM_AGENTS * 2;  // each agent: [selfCIO, TXP]
 
     for (auto cellId : m_cellIds)
     {
         AgentConfig_MASAC config;
         config.cellId = cellId;
         config.obsDim = OBS_DIM;
-        config.actDim = 3;  // [CIO_n1, CIO_n2, TXP]
+        config.actDim = 2;  // [selfCIO, TXP]
         config.neighborCellIds = m_neighborMap[cellId];
 
         m_agents.push_back(std::make_unique<MASACAgent>(
@@ -930,15 +930,12 @@ xAppHandoverSON_MASAC::StepMASAC()
         auto actData = act.accessor<float, 1>();
         const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
 
-        // ── action[0]=CIO→neighbor1, action[1]=CIO→neighbor2, action[2]=TXP ──
-        for (size_t n = 0; n < neighbors.size(); n++)
-        {
-            int cioDB = std::max(-5, std::min(5,
-                static_cast<int>(std::round(actData[n] * 5.0))));
-            m_neighborCio[srcCell][neighbors[n]] = cioDB;
-        }
+        // ── action[0]=selfCIO, action[1]=TXP ──
+        int selfCioDB = std::max(-5, std::min(5,
+            static_cast<int>(std::round(actData[0] * 5.0))));
+        m_selfCio[srcCell] = selfCioDB;
 
-        double txpOffset = static_cast<double>(actData[neighbors.size()]) * 4.0;
+        double txpOffset = static_cast<double>(actData[1]) * 4.0;
         double txpApplied = m_txPower + txpOffset;
         txpApplied = std::max(26.0, std::min(38.0, txpApplied));
 
@@ -946,18 +943,15 @@ xAppHandoverSON_MASAC::StepMASAC()
         std::string txpEp = "/E2Node/" + std::to_string(srcCell) + "/";
         ric->E2SmRcSendTxPowerControlRequest(txpApplied, txpEp);
 
-        // ── 콘솔 로그 (precision 복원) ──
+        // ── 콘솔 로그 ──
         auto oldFmt = std::cout.flags();
         auto oldPrec = std::cout.precision();
         std::cout << std::defaultfloat << std::setprecision(4);
         std::cout << "[ACT-MASAC] Step=" << m_stepCount
-            << " Cell" << srcCell;
-        for (size_t n = 0; n < neighbors.size(); n++)
-            std::cout << " CIO->" << neighbors[n] << "=" << m_neighborCio[srcCell][neighbors[n]] << "dB";
-        std::cout << " TXP=" << txpApplied << "dBm raw=[";
-        for (int64_t d = 0; d < act.size(0); d++)
-            std::cout << (d > 0 ? "," : "") << actData[d];
-        std::cout << "]" << std::endl;
+            << " Cell" << srcCell
+            << " selfCIO=" << selfCioDB << "dB"
+            << " TXP=" << txpApplied << "dBm raw=["
+            << actData[0] << "," << actData[1] << "]" << std::endl;
         std::cout.flags(oldFmt);
         std::cout.precision(oldPrec);
 
@@ -972,46 +966,38 @@ xAppHandoverSON_MASAC::StepMASAC()
 
             double alpha_val = m_agents[i]->GetLogAlpha().exp().item<double>();
             std::ostringstream oss;
-            oss << now << "," << srcCell;
-            for (size_t n = 0; n < neighbors.size(); n++)
-                oss << "," << actData[n];
-            oss << "," << actData[neighbors.size()];
-            for (size_t n = 0; n < neighbors.size(); n++)
-                oss << "," << m_neighborCio[srcCell][neighbors[n]];
-            oss << "," << txpApplied
+            oss << now << "," << srcCell
+                << "," << actData[0] << "," << actData[1]
+                << "," << selfCioDB << "," << txpApplied
                 << "," << cellThp << "," << alpha_val;
             m_maddpgActionsBuf.push_back(oss.str());
         }
     }
 
-    // ── Apply per-neighbor CIO directly ──
+    // ── Apply self CIO to all neighbors ──
     for (auto srcCellId : m_cellIds)
     {
         auto nit = m_neighborMap.find(srcCellId);
         if (nit == m_neighborMap.end()) continue;
+
+        int selfCio = 0;
+        auto sit = m_selfCio.find(srcCellId);
+        if (sit != m_selfCio.end()) selfCio = sit->second;
+
         Json cioList = Json::array();
         for (auto dstCellId : nit->second)
         {
-            int cioDB = 0;
-            auto srcIt = m_neighborCio.find(srcCellId);
-            if (srcIt != m_neighborCio.end())
-            {
-                auto dstIt = srcIt->second.find(dstCellId);
-                if (dstIt != srcIt->second.end())
-                    cioDB = dstIt->second;
-            }
             Json entry;
             entry["CELL_ID"] = dstCellId;
-            entry["CIO_VALUE"] = cioDB * 2;  // IE units
+            entry["CIO_VALUE"] = selfCio * 2;  // IE units
             cioList.push_back(entry);
 
-            // Buffer CSV logging
             if (m_stepCount % 5 == 0)
             {
                 double now = Simulator::Now().GetSeconds();
                 std::ostringstream oss;
                 oss << now << "," << srcCellId << "," << dstCellId << ","
-                    << cioDB << "," << (cioDB * 2);
+                    << selfCio << "," << (selfCio * 2);
                 m_cioActionsBuf.push_back(oss.str());
             }
         }
@@ -1315,8 +1301,7 @@ xAppHandoverSON_MASAC::CheckAndLogStagnation(
         uint16_t cellId = m_agents[i]->GetConfig().cellId;
         auto actData = currentActs[i].accessor<float, 1>();
         int64_t actDim = currentActs[i].size(0);
-        const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
-        int64_t cioEndIdx = static_cast<int64_t>(neighbors.size());
+        int64_t cioEndIdx = 1;  // selfCIO is action[0], TXP is action[1]
 
         std::vector<float> currAct(actDim);
         for (int64_t d = 0; d < actDim; d++)

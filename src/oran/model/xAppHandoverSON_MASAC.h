@@ -268,7 +268,7 @@ class MASACAgent
                int64_t totalObsDim, int64_t totalActDim,
                double actorLr = 7e-5, double criticLr = 1e-4)
         : m_config(config),
-          m_targetEntropy(-1.5)  // -actDim/2 for 3D action space
+          m_targetEntropy(-1.0)  // -actDim/2 for 2D action space
     {
         m_actor = SACActorNet(config.obsDim, config.actDim);
         m_critic = TwinCriticNet(totalObsDim, totalActDim);
@@ -487,8 +487,8 @@ private:
     };
     std::map<uint16_t, SmoothedCellMetrics> m_smoothed;
 
-    // Per-neighbor CIO: m_neighborCio[srcCell][dstCell] = CIO dB
-    std::map<uint16_t, std::map<uint16_t, int>> m_neighborCio;
+    // Self CIO: m_selfCio[cellId] = CIO dB (동일 값이 모든 이웃에 적용)
+    std::map<uint16_t, int> m_selfCio;
 
     // MASAC 함수
     void InitMASAC();

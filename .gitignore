@@ -75,3 +75,7 @@ buil/CMakeFiles/3.22.1/CompilerIdCXX/CMakeCXXCompilerId.cpp
 *a.out
 buil/CMakeFiles/3.22.1/CompilerIdC/CMakeCCompilerId.c
 buil/compile_commands.json
+.~lock.cell_metrics.csv#
+#*.csv
+*.xml
+src/oran/README.md

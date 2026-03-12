@@ -285,52 +285,79 @@ main(int argc, char* argv[])
     enbNodes.Create(numberOfEnbs);
     ueNodes.Create(numberOfUes);
 
+    // ── 3셀 정삼각형 (중심 500,500, 반지름 200m) + 원형 boundary ──
+    const double areaCx = 500.0, areaCy = 500.0;
+    const double enbRadius = 500.0 / std::sqrt(3.0);  // ISD 500m
+    const double ueRadius  = 450.0;
+    double enbX[3], enbY[3];
+    for (int i = 0; i < 3; i++)
+    {
+        double angle = (90.0 + 120.0 * i) * M_PI / 180.0;
+        enbX[i] = areaCx + enbRadius * std::cos(angle);
+        enbY[i] = areaCy + enbRadius * std::sin(angle);
+    }
+
     Ptr<ListPositionAllocator> enbPositionAlloc = CreateObject<ListPositionAllocator>();
-    enbPositionAlloc->Add(Vector(250.0, 356.0, 0));
-    enbPositionAlloc->Add(Vector(750.0, 356.0, 0));
-    enbPositionAlloc->Add(Vector(500.0, 789.0, 0));
+    for (int i = 0; i < 3; i++)
+        enbPositionAlloc->Add(Vector(enbX[i], enbY[i], 0));
     MobilityHelper enbMobility;
     enbMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     enbMobility.SetPositionAllocator(enbPositionAlloc);
     enbMobility.Install(enbNodes);
 
+    std::cout << "[TOPO] Equilateral triangle: ";
+    for (int i = 0; i < 3; i++)
+        std::cout << "Cell" << (i+1) << "=(" << std::fixed << std::setprecision(0)
+                  << enbX[i] << "," << enbY[i] << ") ";
+    std::cout << "  UE radius=" << ueRadius << "m" << std::endl;
+
     MobilityHelper ueMobility;
+    Ptr<ListPositionAllocator> ueAlloc = CreateObject<ListPositionAllocator>();
+    Ptr<UniformRandomVariable> uRng = CreateObject<UniformRandomVariable>();
+    uRng->SetAttribute("Min", DoubleValue(0.0));
+    uRng->SetAttribute("Max", DoubleValue(1.0));
+    Ptr<NormalRandomVariable> nRng = CreateObject<NormalRandomVariable>();
+    nRng->SetAttribute("Mean", DoubleValue(0.0));
+    nRng->SetAttribute("Variance", DoubleValue(1.0));
 
     if (saturate)
     {
-        // ── 가우시안 UE 배치 ──
-        // 중심: eNB 삼각형 내부 (300~700, 400~750) 에서 랜덤
-        // saturate: σ=150m (집중), normal: σ=250m (균등에 가까움)
-        Ptr<ListPositionAllocator> ueAlloc = CreateObject<ListPositionAllocator>();
-        Ptr<UniformRandomVariable> uRng = CreateObject<UniformRandomVariable>();
-        uRng->SetAttribute("Min", DoubleValue(0.0));
-        uRng->SetAttribute("Max", DoubleValue(1.0));
-        Ptr<NormalRandomVariable> nRng = CreateObject<NormalRandomVariable>();
-        nRng->SetAttribute("Mean", DoubleValue(0.0));
-        nRng->SetAttribute("Variance", DoubleValue(1.0));
-
-        double cx = 300.0 + uRng->GetValue() * 400.0;  // 300~700
-        double cy = 400.0 + uRng->GetValue() * 350.0;  // 400~750
-        double sigma = saturate ? 150.0 : 250.0;
-
-        std::cout << "[UE-DIST] Gaussian center=(" << std::fixed << std::setprecision(0)
-                  << cx << "," << cy << ") σ=" << sigma << "m"
-                  << (saturate ? " (saturate)" : " (normal)") << std::endl;
+        double sigma = 120.0;
+        std::cout << "[UE-DIST] Gaussian near Cell1 (" << enbX[0] << "," << enbY[0]
+                  << ") σ=" << sigma << "m (saturate)" << std::endl;
 
         for (uint16_t i = 0; i < numberOfUes; i++)
         {
-            double x = cx + nRng->GetValue() * sigma;
-            double y = cy + nRng->GetValue() * sigma;
-            x = std::max(100.0, std::min(900.0, x));
-            y = std::max(100.0, std::min(900.0, y));
+            double x, y;
+            do {
+                x = enbX[0] + nRng->GetValue() * sigma;
+                y = enbY[0] + nRng->GetValue() * sigma;
+            } while ((x - areaCx) * (x - areaCx) + (y - areaCy) * (y - areaCy)
+                     > ueRadius * ueRadius);
             ueAlloc->Add(Vector(x, y, 0));
         }
-        ueMobility.SetPositionAllocator(ueAlloc);
     }
+    else
+    {
+        std::cout << "[UE-DIST] Uniform circular (r=" << ueRadius << "m) (normal)" << std::endl;
 
-    // 이동성 모델: saturate/normal 공통 (1m/s)
+        for (uint16_t i = 0; i < numberOfUes; i++)
+        {
+            double x, y;
+            do {
+                x = areaCx + (uRng->GetValue() * 2.0 - 1.0) * ueRadius;
+                y = areaCy + (uRng->GetValue() * 2.0 - 1.0) * ueRadius;
+            } while ((x - areaCx) * (x - areaCx) + (y - areaCy) * (y - areaCy)
+                     > ueRadius * ueRadius);
+            ueAlloc->Add(Vector(x, y, 0));
+        }
+    }
+    ueMobility.SetPositionAllocator(ueAlloc);
+
+    double bMin = areaCx - ueRadius - 10.0;
+    double bMax = areaCx + ueRadius + 10.0;
     ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
-        "Bounds", RectangleValue(Rectangle(50, 950, 50, 950)),
+        "Bounds", RectangleValue(Rectangle(bMin, bMax, bMin, bMax)),
         "Speed", StringValue("ns3::ConstantRandomVariable[Constant=3]"),
         "Pause", StringValue("ns3::ConstantRandomVariable[Constant=0.1]"));
     ueMobility.Install(ueNodes);

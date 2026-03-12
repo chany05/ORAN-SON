@@ -156,13 +156,20 @@ main(int argc, char* argv[])
     remoteHostStaticRouting->AddNetworkRouteTo(Ipv4Address("7.0.0.0"),
                                                Ipv4Mask("255.0.0.0"), 1);
 
-    // ─── 3셀 토폴로지 (MASAC과 동일) ───
+    // ─── 3셀 정삼각형 토폴로지 (MASAC과 동일, 원형 boundary) ───
+    const double areaCx = 500.0, areaCy = 500.0;
+    const double enbRadius = 500.0 / std::sqrt(3.0);  // ISD 500m
+    const double ueRadius  = 450.0;
+    double enbX[3], enbY[3];
+    for (int i = 0; i < 3; i++)
+    {
+        double angle = (90.0 + 120.0 * i) * M_PI / 180.0;
+        enbX[i] = areaCx + enbRadius * std::cos(angle);
+        enbY[i] = areaCy + enbRadius * std::sin(angle);
+    }
+
     NodeContainer enbNodes;
     enbNodes.Create(numberOfEnbs);
-
-    // eNB 좌표: Cell1(250,356), Cell2(750,356), Cell3(500,789)
-    double enbX[3] = {250.0, 750.0, 500.0};
-    double enbY[3] = {356.0, 356.0, 789.0};
 
     Ptr<ListPositionAllocator> enbPos = CreateObject<ListPositionAllocator>();
     for (int i = 0; i < 3; i++)
@@ -173,42 +180,44 @@ main(int argc, char* argv[])
     enbMobility.SetPositionAllocator(enbPos);
     enbMobility.Install(enbNodes);
 
+    std::cout << "[TOPO] Equilateral triangle: ";
+    for (int i = 0; i < 3; i++)
+        std::cout << "Cell" << (i+1) << "=(" << std::fixed << std::setprecision(0)
+                  << enbX[i] << "," << enbY[i] << ") ";
+    std::cout << std::endl;
+
     // ─── UE: 각 셀의 eNB 근처에 Gaussian(σ=80m) 배치, 3m/s 이동 ───
     uint16_t uesCounts[3] = {uesCell1, uesCell2, uesCell3};
     NodeContainer ueNodes;
     ueNodes.Create(totalUes);
 
-    // 각 셀별로 UE를 eNB 근처에 배치
     Ptr<ListPositionAllocator> uePos = CreateObject<ListPositionAllocator>();
     Ptr<NormalRandomVariable> gaussRv = CreateObject<NormalRandomVariable>();
     gaussRv->SetAttribute("Mean", DoubleValue(0.0));
     gaussRv->SetAttribute("Variance", DoubleValue(80.0 * 80.0));
 
-    uint32_t ueIdx = 0;
     for (int cell = 0; cell < 3; cell++)
     {
         for (uint16_t u = 0; u < uesCounts[cell]; u++)
         {
             double dx = gaussRv->GetValue();
             double dy = gaussRv->GetValue();
-            // 반경 150m으로 클램프
             double dist = std::sqrt(dx * dx + dy * dy);
             if (dist > 150.0)
             {
                 dx *= 150.0 / dist;
                 dy *= 150.0 / dist;
             }
-            double ux = std::max(50.0, std::min(950.0, enbX[cell] + dx));
-            double uy = std::max(50.0, std::min(950.0, enbY[cell] + dy));
-            uePos->Add(Vector(ux, uy, 0));
-            ueIdx++;
+            uePos->Add(Vector(enbX[cell] + dx, enbY[cell] + dy, 0));
         }
     }
 
+    double bMin = areaCx - ueRadius - 10.0;
+    double bMax = areaCx + ueRadius + 10.0;
     MobilityHelper ueMobility;
     ueMobility.SetPositionAllocator(uePos);
     ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
-        "Bounds", RectangleValue(Rectangle(50, 950, 50, 950)),
+        "Bounds", RectangleValue(Rectangle(bMin, bMax, bMin, bMax)),
         "Speed", StringValue("ns3::ConstantRandomVariable[Constant=3]"),
         "Pause", StringValue("ns3::ConstantRandomVariable[Constant=0.1]"));
     ueMobility.Install(ueNodes);
