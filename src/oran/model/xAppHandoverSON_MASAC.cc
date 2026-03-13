@@ -724,7 +724,7 @@ xAppHandoverSON_MASAC::ComputeRewards()
         prbUtils.push_back(cit != m_cellContexts.end() ? cit->second.prbUtilDl : 0.0);
     }
 
-    // Reward: total throughput (normalized) - UE std penalty
+    // Reward: global throughput with a small per-agent overload penalty.
     double totalThp = std::accumulate(thps.begin(), thps.end(), 0.0);
     double normalizedThp = totalThp / 2e4;  // scale to ~0-1 range
 
@@ -737,13 +737,13 @@ xAppHandoverSON_MASAC::ComputeRewards()
         stdUeNorm = std::sqrt(ueVar / ueCounts.size()) / totalUEs;
     }
 
-    constexpr double UE_STD_PENALTY = 0.5;
-    double normalizedReward = normalizedThp; // - UE_STD_PENALTY * stdUeNorm;
-
     std::vector<double> rewards;
     for (size_t i = 0; i < thps.size(); i++)
     {
-        rewards.push_back(normalizedReward);
+        constexpr double OVERLOAD_KNEE_UE = 6.0;
+        constexpr double OVERLOAD_PENALTY = 0.1;
+        double overload = std::max(0.0, ueCounts[i] - OVERLOAD_KNEE_UE) / OVERLOAD_KNEE_UE;
+        rewards.push_back(normalizedThp - OVERLOAD_PENALTY * overload);
     }
 
     // For logging
@@ -1147,12 +1147,17 @@ xAppHandoverSON_MASAC::TrainMASAC()
             float curCriticLoss = criticLoss.item<float>();
             float alphaVal = agent->GetLogAlpha().exp().item<float>();
 
+            auto oldFmt = std::cout.flags();
+            auto oldPrec = std::cout.precision();
+            std::cout << std::fixed << std::setprecision(6);
             std::cout << "[MASAC Train] Step=" << m_stepCount
                       << " | Agent=" << i
                       << " | CriticLoss=" << curCriticLoss
                       << " | ActorLoss=" << curActorLoss
                       << " | Alpha=" << alphaVal
                       << std::endl;
+            std::cout.flags(oldFmt);
+            std::cout.precision(oldPrec);
         }
     }
 }

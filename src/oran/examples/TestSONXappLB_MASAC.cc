@@ -284,11 +284,11 @@ main(int argc, char* argv[])
     enbNodes.Create(numberOfEnbs);
     ueNodes.Create(numberOfUes);
 
-    // ── 3셀 정삼각형 (중심 500,500, 반지름 200m) ──
-    // Voronoi 면적 & edge 비율 균등 (원형 boundary와 조합)
+    // ── 3셀 정삼각형 (중심 500,500) ──
+    // UE boundary is aligned with the triangle circumradius for a symmetric 3-cell region.
     const double areaCx = 500.0, areaCy = 500.0;
     const double enbRadius = 500.0 / std::sqrt(3.0);  // ISD 500m → 외접원 ~289m
-    const double ueRadius  = 450.0;                    // UE 배치/이동 원형 반경
+    const double ueRadius  = 500.0 / std::sqrt(3.0);  // Symmetric 3-cell UE boundary
     double enbX[3], enbY[3];
     for (int i = 0; i < 3; i++)
     {
