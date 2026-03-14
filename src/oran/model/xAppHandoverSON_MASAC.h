@@ -451,19 +451,9 @@ private:
     static constexpr double TAU_SOFT     = 0.005;
     static constexpr double ACTOR_LR     = 3e-4;
     static constexpr double CRITIC_LR    = 3e-4;
-    static constexpr int    N_STEP       = 3;
-
     // 에이전트 + 버퍼
     std::vector<std::unique_ptr<MASACAgent>> m_agents;
     std::unique_ptr<ReplayBuffer_MASAC> m_replayBuffer;
-
-    // n-step transition buffer
-    struct NStepTransition {
-        std::vector<torch::Tensor> obs;
-        std::vector<torch::Tensor> acts;
-        std::vector<double> rewards;  // per-agent reward at this step
-    };
-    std::deque<NStepTransition> m_nStepBuffer;
 
     // 이전 스텝 저장
     std::vector<torch::Tensor> m_prevObs;
@@ -476,17 +466,6 @@ private:
     std::vector<uint16_t> m_cellIds;
     std::map<uint16_t, std::vector<uint16_t>> m_neighborMap;
     uint32_t m_totalUEs = 40;
-
-    // EMA smoothing for noisy cell metrics
-    static constexpr double EMA_ALPHA = 0.3;  // 0.3 = 30% new, 70% old
-    struct SmoothedCellMetrics {
-        double ueCount = 0.0;
-        double edgeUeCount = 0.0;
-        double dlThp = 0.0;
-        double ulThp = 0.0;
-        bool initialized = false;
-    };
-    std::map<uint16_t, SmoothedCellMetrics> m_smoothed;
 
     // Self CIO: m_selfCio[cellId] = CIO dB (동일 값이 모든 이웃에 적용)
     std::map<uint16_t, int> m_selfCio;

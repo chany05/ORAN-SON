@@ -64,27 +64,6 @@ xAppHandoverSON_MASAC::PeriodicSONCheck()
 
     CollectKPMs();
 
-    // EMA smoothing of cell metrics
-    for (auto& [cellId, cell] : m_cellContexts)
-    {
-        auto& s = m_smoothed[cellId];
-        if (!s.initialized)
-        {
-            s.ueCount = cell.ueCount;
-            s.edgeUeCount = cell.edgeUeCount;
-            s.dlThp = cell.totalThroughputDl;
-            s.ulThp = cell.totalThroughputUl;
-            s.initialized = true;
-        }
-        else
-        {
-            s.ueCount     = EMA_ALPHA * cell.ueCount     + (1.0 - EMA_ALPHA) * s.ueCount;
-            s.edgeUeCount = EMA_ALPHA * cell.edgeUeCount + (1.0 - EMA_ALPHA) * s.edgeUeCount;
-            s.dlThp       = EMA_ALPHA * cell.totalThroughputDl + (1.0 - EMA_ALPHA) * s.dlThp;
-            s.ulThp       = EMA_ALPHA * cell.totalThroughputUl + (1.0 - EMA_ALPHA) * s.ulThp;
-        }
-    }
-
     if (m_stepCount % 5 == 0)
     {
         LogCellMetrics();
@@ -697,7 +676,7 @@ xAppHandoverSON_MASAC::BuildObservation(uint16_t cellId)
 std::vector<double>
 xAppHandoverSON_MASAC::ComputeRewards()
 {
-    // EMA-smoothed values for thp, ueCount; raw prbUtil
+    // Raw values for thp, ueCount; raw prbUtil
     std::vector<double> thps;
     std::vector<double> prbUtils;
     std::vector<double> ueCounts;
@@ -708,13 +687,12 @@ xAppHandoverSON_MASAC::ComputeRewards()
 
     for (auto cellId : m_cellIds)
     {
-        auto sit = m_smoothed.find(cellId);
         auto cit = m_cellContexts.find(cellId);
-        if (sit != m_smoothed.end() && sit->second.initialized)
+        if (cit != m_cellContexts.end())
         {
-            thps.push_back(sit->second.dlThp + sit->second.ulThp);  // raw kbps
-            ueCounts.push_back(sit->second.ueCount);
-            totalUEs += sit->second.ueCount;
+            thps.push_back(cit->second.totalThroughputDl + cit->second.totalThroughputUl);
+            ueCounts.push_back(cit->second.ueCount);
+            totalUEs += cit->second.ueCount;
         }
         else
         {
@@ -806,19 +784,22 @@ xAppHandoverSON_MASAC::StepMASAC()
                 continue;
             }
             const auto& co = cellObsMap[cellId];
-            const auto& sm = m_smoothed[cellId];
             float avgCqi = (co.cqiCount > 0) ? co.sumCqi / co.cqiCount : 0.0f;
-            double smoothTotal = 0.0;
-            for (auto& [cid, s] : m_smoothed) smoothTotal += s.ueCount;
+            double totalUeCount = 0.0;
+            for (auto& [cid, cellCtx] : m_cellContexts) totalUeCount += cellCtx.ueCount;
             obs[0] = avgCqi / 15.0f;
-            obs[1] = static_cast<float>(sm.dlThp / 1e3) / 5.0f;
-            obs[2] = (sm.ueCount > 0.5) ? static_cast<float>(sm.edgeUeCount / sm.ueCount) : 0.0f;
-            obs[3] = (smoothTotal > 0.5) ? static_cast<float>(sm.ueCount / smoothTotal) : 0.0f;
+            obs[1] = static_cast<float>(cellIt->second.totalThroughputDl / 1e3) / 5.0f;
+            obs[2] = (cellIt->second.ueCount > 0)
+                ? static_cast<float>(cellIt->second.edgeUeCount) / static_cast<float>(cellIt->second.ueCount)
+                : 0.0f;
+            obs[3] = (totalUeCount > 0.5)
+                ? static_cast<float>(cellIt->second.ueCount / totalUeCount)
+                : 0.0f;
             currentObs.push_back(torch::from_blob(obs.data(), {OBS_DIM}, torch::kFloat32).clone());
         }
     }
 
-    // ── 이전 전이를 n-step buffer에 저장 후 replay buffer로 flush ──
+    // ── 이전 전이를 1-step transition으로 replay buffer에 저장 ──
     std::vector<double> stepRewards;
     if (m_hasPrevStep)
     {
@@ -828,69 +809,13 @@ xAppHandoverSON_MASAC::StepMASAC()
 
         if (!m_inferenceOnly)
         {
-            // n-step 버퍼에 현재 전이 추가
-            NStepTransition trans;
-            trans.obs = m_prevObs;
-            trans.acts = m_prevActs;
-            trans.rewards = stepRewards;
-            m_nStepBuffer.push_back(std::move(trans));
-
-            // n-step 버퍼가 N_STEP개 모이면 replay buffer에 push
-            if ((int)m_nStepBuffer.size() >= N_STEP || isDone)
-            {
-                // 가장 오래된 전이의 obs/acts를 시작점으로 사용
-                const auto& oldest = m_nStepBuffer.front();
-
-                // n-step discounted reward 계산
-                std::vector<double> nStepRewards(NUM_AGENTS, 0.0);
-                for (int k = 0; k < (int)m_nStepBuffer.size(); k++)
-                {
-                    double discount = std::pow(GAMMA, k);
-                    for (int a = 0; a < NUM_AGENTS; a++)
-                    {
-                        nStepRewards[a] += discount * m_nStepBuffer[k].rewards[a];
-                    }
-                }
-
-                Experience_MASAC exp;
-                exp.obs = oldest.obs;
-                exp.acts = oldest.acts;
-                exp.rewards = nStepRewards;
-                exp.nextObs = currentObs;  // s_{t+n}
-                exp.done = isDone;
-                m_replayBuffer->Push(std::move(exp));
-
-                // 가장 오래된 전이 제거 (sliding window)
-                m_nStepBuffer.pop_front();
-            }
-
-            // 에피소드 종료 시 남은 전이도 flush
-            if (isDone)
-            {
-                while (!m_nStepBuffer.empty())
-                {
-                    const auto& oldest = m_nStepBuffer.front();
-                    std::vector<double> nStepRewards(NUM_AGENTS, 0.0);
-                    for (int k = 0; k < (int)m_nStepBuffer.size(); k++)
-                    {
-                        double discount = std::pow(GAMMA, k);
-                        for (int a = 0; a < NUM_AGENTS; a++)
-                        {
-                            nStepRewards[a] += discount * m_nStepBuffer[k].rewards[a];
-                        }
-                    }
-
-                    Experience_MASAC exp;
-                    exp.obs = oldest.obs;
-                    exp.acts = oldest.acts;
-                    exp.rewards = nStepRewards;
-                    exp.nextObs = currentObs;
-                    exp.done = true;
-                    m_replayBuffer->Push(std::move(exp));
-
-                    m_nStepBuffer.pop_front();
-                }
-            }
+            Experience_MASAC exp;
+            exp.obs = m_prevObs;
+            exp.acts = m_prevActs;
+            exp.rewards = stepRewards;
+            exp.nextObs = currentObs;
+            exp.done = isDone;
+            m_replayBuffer->Push(std::move(exp));
         }
 
         if (m_stepCount % 10 == 0)
@@ -1097,8 +1022,7 @@ xAppHandoverSON_MASAC::TrainMASAC()
             torch::NoGradGuard noGrad;
             auto [tq1, tq2] = agent->GetTargetCritic()->forward(allNextObs, allTargetNextActs);
             auto minTargetQ = torch::min(tq1, tq2);
-            double gammaN = std::pow(GAMMA, N_STEP);
-            targetQ = rewardBatch[i] + gammaN * (1.0 - doneBatch)
+            targetQ = rewardBatch[i] + GAMMA * (1.0 - doneBatch)
                     * (minTargetQ - alpha * targetNextLogProbs[i]);
         }
 
