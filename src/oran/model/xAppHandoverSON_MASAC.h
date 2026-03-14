@@ -293,9 +293,17 @@ class MASACAgent
     {
         torch::NoGradGuard noGrad;
         if (deterministic) {
+            const bool wasTraining = m_actor->is_training();
             m_actor->eval();
             auto act = m_actor->deterministic(obs);
-            m_actor->train();
+            if (wasTraining)
+            {
+                m_actor->train();
+            }
+            else
+            {
+                m_actor->eval();
+            }
             return act;
         }
         auto [action, log_prob] = m_actor->sample(obs);
@@ -433,6 +441,7 @@ class xAppHandoverSON_MASAC : public xAppHandover
     std::vector<std::string> m_maddpgActionsBuf;
     std::vector<std::string> m_rewardCurveBuf;
     std::vector<std::string> m_stagnationBuf;
+    std::vector<std::string> m_trainDiagBuf;
 public:
     void FlushCsvLogs();
 private:

@@ -676,7 +676,7 @@ xAppHandoverSON_MASAC::BuildObservation(uint16_t cellId)
 std::vector<double>
 xAppHandoverSON_MASAC::ComputeRewards()
 {
-    // Raw values for thp, ueCount; raw prbUtil
+    // Raw values for DL thp, ueCount; raw prbUtil
     std::vector<double> thps;
     std::vector<double> prbUtils;
     std::vector<double> ueCounts;
@@ -690,7 +690,7 @@ xAppHandoverSON_MASAC::ComputeRewards()
         auto cit = m_cellContexts.find(cellId);
         if (cit != m_cellContexts.end())
         {
-            thps.push_back(cit->second.totalThroughputDl + cit->second.totalThroughputUl);
+            thps.push_back(cit->second.totalThroughputDl);
             ueCounts.push_back(cit->second.ueCount);
             totalUEs += cit->second.ueCount;
         }
@@ -1015,6 +1015,7 @@ xAppHandoverSON_MASAC::TrainMASAC()
     {
         auto& agent = m_agents[i];
         auto alpha = agent->GetLogAlpha().exp().detach();
+        auto alphaVal = alpha.item<float>();
 
         // ─ Twin Critic 업데이트 ─
         torch::Tensor targetQ;
@@ -1065,11 +1066,38 @@ xAppHandoverSON_MASAC::TrainMASAC()
         // ─ Target Critic Soft Update (no target actor) ─
         agent->SoftUpdateTargets(TAU_SOFT);
 
+        if (m_stepCount % 5 == 0)
+        {
+            double now = Simulator::Now().GetSeconds();
+            float obsMean = obsBatch[i].mean().item<float>();
+            float obsStd = obsBatch[i].std(/*unbiased=*/false).item<float>();
+            float targetQMean = targetQ.mean().item<float>();
+            float q1Mean = q1.mean().item<float>();
+            float q2Mean = q2.mean().item<float>();
+            float logProbMean = currLogProb.mean().item<float>();
+            float actionAbsMean = currAct.abs().mean().item<float>();
+            float obsNormMean = agent->GetActor()->obsNorm->m_mean.mean().item<float>();
+            float obsNormVar = agent->GetActor()->obsNorm->m_var.mean().item<float>();
+
+            std::ostringstream oss;
+            oss << now << "," << m_stepCount << "," << i << ","
+                << m_replayBuffer->Size() << ","
+                << criticLoss.item<float>() << ","
+                << actorLoss.item<float>() << ","
+                << alphaVal << ","
+                << targetQMean << ","
+                << q1Mean << "," << q2Mean << ","
+                << logProbMean << ","
+                << actionAbsMean << ","
+                << obsMean << "," << obsStd << ","
+                << obsNormMean << "," << obsNormVar;
+            m_trainDiagBuf.push_back(oss.str());
+        }
+
         if (m_stepCount % 10 == 0)
         {
             float curActorLoss  = actorLoss.item<float>();
             float curCriticLoss = criticLoss.item<float>();
-            float alphaVal = agent->GetLogAlpha().exp().item<float>();
 
             auto oldFmt = std::cout.flags();
             auto oldPrec = std::cout.precision();
@@ -1185,6 +1213,7 @@ xAppHandoverSON_MASAC::InitCsvLoggers()
         m_maddpgActionsBuf.push_back("time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps,alpha");
         m_rewardCurveBuf.push_back("time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std,ue_std");
         m_stagnationBuf.push_back("time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant");
+        m_trainDiagBuf.push_back("time_s,step,agent,buffer_size,critic_loss,actor_loss,alpha,target_q_mean,q1_mean,q2_mean,log_prob_mean,action_abs_mean,obs_mean,obs_std,obs_norm_mean,obs_norm_var");
     }
 }
 
@@ -1350,9 +1379,11 @@ xAppHandoverSON_MASAC::FlushCsvLogs()
     writeFile("maddpg_actions.csv",   m_maddpgActionsBuf,   append);
     writeFile("reward_curve.csv",     m_rewardCurveBuf,     append);
     writeFile("stagnation_check.csv", m_stagnationBuf,      append);
+    writeFile("train_diag.csv",       m_trainDiagBuf,       append);
 
     NS_LOG_UNCOND("[MASAC] CSV logs flushed ("
         << m_cellMetricsBuf.size() << " cell_metrics, "
         << m_cioActionsBuf.size() << " cio_actions, "
-        << m_rewardCurveBuf.size() << " reward_curve rows)");
+        << m_rewardCurveBuf.size() << " reward_curve rows, "
+        << m_trainDiagBuf.size() << " train_diag rows)");
 }
