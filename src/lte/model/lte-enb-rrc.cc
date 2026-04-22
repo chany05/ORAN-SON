@@ -1726,7 +1726,7 @@ LteEnbRrc::PublishCellKpm()
 
 
 
-    Simulator::Schedule(Seconds(0.1), &LteEnbRrc::PublishCellKpm, this);
+    Simulator::Schedule(m_kpmPublishPeriodicity, &LteEnbRrc::PublishCellKpm, this);
 }
 
 void
@@ -2276,6 +2276,11 @@ LteEnbRrc::GetTypeId()
                           "The interval for sending system information (Time value)",
                           TimeValue(MilliSeconds(80)),
                           MakeTimeAccessor(&LteEnbRrc::m_systemInformationPeriodicity),
+                          MakeTimeChecker())
+            .AddAttribute("KpmPublishPeriodicity",
+                          "The interval for publishing cell KPMs to the local E2 agent.",
+                          TimeValue(MilliSeconds(100)),
+                          MakeTimeAccessor(&LteEnbRrc::m_kpmPublishPeriodicity),
                           MakeTimeChecker())
 
             // SRS related attributes
@@ -2872,7 +2877,7 @@ LteEnbRrc::ConfigureCell(std::map<uint8_t, Ptr<ComponentCarrierBaseStation>> ccP
      * SystemInformationPeriodicity attribute to configure this).
      */
     Simulator::Schedule(MilliSeconds(16), &LteEnbRrc::SendSystemInformation, this);
-    Simulator::Schedule(Seconds(0.5), &LteEnbRrc::PublishCellKpm, this);
+    Simulator::Schedule(m_kpmPublishPeriodicity, &LteEnbRrc::PublishCellKpm, this);
     m_configured = true;
 }
 

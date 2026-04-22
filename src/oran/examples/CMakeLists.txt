@@ -145,7 +145,9 @@ build_lib_example(
         ${liblte}
         ${liboran}
 )
-if(NOT(${ARMADILLO} STREQUAL ARMADILLO-NOTFOUND) AND NOT(${MLPACK} STREQUAL MLPACK-NOTFOUND))
+if(NOT(${ARMADILLO} STREQUAL ARMADILLO-NOTFOUND)
+   AND NOT(${MLPACK} STREQUAL MLPACK-NOTFOUND)
+   AND ENSMALLEN_INCLUDE_DIR)
     build_lib_example(
             NAME TestHandoverXappMLPACK
             SOURCE_FILES TestHandoverXappMLPACK.cc

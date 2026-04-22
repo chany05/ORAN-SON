@@ -1718,6 +1718,10 @@ class LteEnbRrc : public Object
      */
     Time m_systemInformationPeriodicity;
     /**
+     * The `KpmPublishPeriodicity` attribute. The interval for publishing local cell KPMs.
+     */
+    Time m_kpmPublishPeriodicity;
+    /**
      * The `SrsPeriodicity` attribute. The SRS periodicity in milliseconds.
      */
     uint16_t m_srsCurrentPeriodicityId;              ///< SRS current periodicity ID

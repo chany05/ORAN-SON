@@ -17,6 +17,32 @@ using namespace oran;
 
 NS_LOG_COMPONENT_DEFINE("xAppHandoverSON");
 
+namespace
+{
+bool
+HasRegisteredCells(const std::vector<uint16_t>& expectedCellIds)
+{
+    if (expectedCellIds.empty())
+    {
+        return true;
+    }
+
+    const auto registeredCellIds = E2AP::GetRegisteredCellIds();
+    if (registeredCellIds.size() < expectedCellIds.size())
+    {
+        return false;
+    }
+
+    return std::all_of(expectedCellIds.begin(),
+                       expectedCellIds.end(),
+                       [&registeredCellIds](uint16_t cellId) {
+                           return std::find(registeredCellIds.begin(),
+                                            registeredCellIds.end(),
+                                            cellId) != registeredCellIds.end();
+                       });
+}
+} // namespace
+
 xAppHandoverSON::xAppHandoverSON(float sonPeriodicitySec, bool initiateHandovers,
                                  bool loadPretrained, bool inferenceOnly,
                                  double simStopTime, bool baseline)
@@ -62,6 +88,15 @@ void
 xAppHandoverSON::PeriodicSONCheck()
 {
     NS_LOG_FUNCTION(this);
+
+    if (!HasRegisteredCells(m_cellIds))
+    {
+        NS_LOG_LOGIC("[SON] Waiting for E2 setup before starting MADDPG control loop");
+        Simulator::Schedule(Seconds(m_sonPeriodicitySec),
+                            &xAppHandoverSON::PeriodicSONCheck,
+                            this);
+        return;
+    }
 
     CollectKPMs();
 
@@ -280,11 +315,15 @@ xAppHandoverSON::CollectCellKpms()
     auto ueCountMap = ric->QueryKpmMetric("/KPM/DRB.UEActiveDl.QCI");
     for (auto& [endpoint, measurements] : ueCountMap)
     {
-        std::string mostRecentTimestamp("");
+        bool hasMostRecentTimestamp = false;
+        uint64_t mostRecentTimestamp = 0;
         for (auto& m : measurements)
         {
-            if (mostRecentTimestamp.empty())
+            if (!hasMostRecentTimestamp)
+            {
                 mostRecentTimestamp = m.timestamp;
+                hasMostRecentTimestamp = true;
+            }
             if (mostRecentTimestamp != m.timestamp)
                 continue;
 
@@ -307,11 +346,15 @@ xAppHandoverSON::CollectCellKpms()
     auto txPwrMap = ric->QueryKpmMetric("/KPM/CARR.AvgTxPwr");
     for (auto& [endpoint, measurements] : txPwrMap)
     {
-        std::string mostRecentTimestamp("");
+        bool hasMostRecentTimestamp = false;
+        uint64_t mostRecentTimestamp = 0;
         for (auto& m : measurements)
         {
-            if (mostRecentTimestamp.empty())
+            if (!hasMostRecentTimestamp)
+            {
                 mostRecentTimestamp = m.timestamp;
+                hasMostRecentTimestamp = true;
+            }
             if (mostRecentTimestamp != m.timestamp)
                 continue;
             if (!m.measurements.contains("CELLID") ||
@@ -1347,21 +1390,54 @@ xAppHandoverSON::LogCellMetrics()
 void
 xAppHandoverSON::FlushCsvLogs()
 {
-    auto writeFile = [](const std::string& filename, const std::vector<std::string>& buf, bool append) {
+    auto writeFile = [](const std::string& filename,
+                        const std::string& header,
+                        const std::vector<std::string>& buf,
+                        bool append) {
         if (buf.empty()) return;
+        bool needsHeader = true;
+        if (append)
+        {
+            std::ifstream existing(filename, std::ios::ate);
+            needsHeader = (!existing.is_open() || existing.tellg() == 0);
+        }
+
         std::ofstream f(filename, append ? std::ios::app : std::ios::out);
-        for (const auto& line : buf)
-            f << line << "\n";
+        if (needsHeader && !header.empty())
+        {
+            f << header << "\n";
+        }
+        size_t startIdx = (needsHeader && !buf.empty() && buf.front() == header) ? 1 : 0;
+        for (size_t i = startIdx; i < buf.size(); ++i)
+            f << buf[i] << "\n";
         f.close();
     };
 
     bool append = (m_loadPretrained || m_inferenceOnly);
-    writeFile("cell_metrics.csv",     m_cellMetricsBuf,     append);
-    writeFile("cio_actions.csv",      m_cioActionsBuf,      append);
-    writeFile("maddpg_actions.csv",   m_maddpgActionsBuf,   append);
-    writeFile("reward_curve.csv",     m_rewardCurveBuf,     append);
-    writeFile("train_diag.csv",      m_trainDiagBuf,       append);
-    writeFile("stagnation_check.csv", m_stagnationBuf,      append);
+    writeFile("cell_metrics.csv",
+              "time_s,cellId,ueCount,edgeUeCount,cellDlThp_kbps,cellUlThp_kbps,avgCqi,txPower_dBm,prbUtilDl",
+              m_cellMetricsBuf,
+              append);
+    writeFile("cio_actions.csv",
+              "time_s,srcCellId,neighborCellId,cioDB,cioIE",
+              m_cioActionsBuf,
+              append);
+    writeFile("maddpg_actions.csv",
+              "time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps",
+              m_maddpgActionsBuf,
+              append);
+    writeFile("reward_curve.csv",
+              "time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std,ue_std",
+              m_rewardCurveBuf,
+              append);
+    writeFile("train_diag.csv",
+              "time_s,step,agent,actor_loss,critic_loss,actor_grad_norm,critic_grad_norm,actor_weight_norm,critic_weight_norm,act_mean,act_std,sat_ratio",
+              m_trainDiagBuf,
+              append);
+    writeFile("stagnation_check.csv",
+              "time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant",
+              m_stagnationBuf,
+              append);
 
     NS_LOG_UNCOND("[MADDPG] CSV logs flushed ("
         << m_cellMetricsBuf.size() << " cell_metrics, "

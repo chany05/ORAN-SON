@@ -1,0 +1,1 @@
+time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant

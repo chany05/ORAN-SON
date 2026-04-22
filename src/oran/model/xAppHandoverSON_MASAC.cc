@@ -17,9 +17,37 @@ using namespace oran;
 
 NS_LOG_COMPONENT_DEFINE("xAppHandoverSON_MASAC");
 
+namespace
+{
+bool
+HasRegisteredCells(const std::vector<uint16_t>& expectedCellIds)
+{
+    if (expectedCellIds.empty())
+    {
+        return true;
+    }
+
+    const auto registeredCellIds = E2AP::GetRegisteredCellIds();
+    if (registeredCellIds.size() < expectedCellIds.size())
+    {
+        return false;
+    }
+
+    return std::all_of(expectedCellIds.begin(),
+                       expectedCellIds.end(),
+                       [&registeredCellIds](uint16_t cellId) {
+                           return std::find(registeredCellIds.begin(),
+                                            registeredCellIds.end(),
+                                            cellId) != registeredCellIds.end();
+                       });
+}
+} // namespace
+
 xAppHandoverSON_MASAC::xAppHandoverSON_MASAC(float sonPeriodicitySec, bool initiateHandovers,
                                              bool loadPretrained, bool inferenceOnly,
-                                             double simStopTime)
+                                             double simStopTime,
+                                             double rewardPenaltyWeight,
+                                             bool baseline)
     : xAppHandover(),
       m_sonPeriodicitySec(sonPeriodicitySec),
       m_initiateHandovers(initiateHandovers),
@@ -29,6 +57,7 @@ xAppHandoverSON_MASAC::xAppHandoverSON_MASAC(float sonPeriodicitySec, bool initi
       m_cqiThreshold(11),
       m_txPower(32.0),
       m_frequency(2.12e9),
+      m_rewardPenaltyWeight(rewardPenaltyWeight),
       m_dlBandwidthPrb(100)
 {
     NS_LOG_FUNCTION(this);
@@ -44,9 +73,16 @@ xAppHandoverSON_MASAC::xAppHandoverSON_MASAC(float sonPeriodicitySec, bool initi
 
     m_loadPretrained = loadPretrained;
     m_inferenceOnly  = inferenceOnly;
+    m_baseline       = baseline;
     m_simStopTime    = simStopTime;
 
-    if (m_useMADDPG)
+    // Fixed 3-cell topology for both RL and baseline modes.
+    m_cellIds = {1, 2, 3};
+    m_neighborMap[1] = {2, 3};
+    m_neighborMap[2] = {1, 3};
+    m_neighborMap[3] = {1, 2};
+
+    if (m_useMADDPG && !m_baseline)
     {
         InitMASAC();
     }
@@ -61,6 +97,15 @@ void
 xAppHandoverSON_MASAC::PeriodicSONCheck()
 {
     NS_LOG_FUNCTION(this);
+
+    if (!HasRegisteredCells(m_cellIds))
+    {
+        NS_LOG_LOGIC("[SON] Waiting for E2 setup before starting MASAC control loop");
+        Simulator::Schedule(Seconds(m_sonPeriodicitySec),
+                            &xAppHandoverSON_MASAC::PeriodicSONCheck,
+                            this);
+        return;
+    }
 
     CollectKPMs();
 
@@ -77,7 +122,12 @@ xAppHandoverSON_MASAC::PeriodicSONCheck()
     std::cout << "\n[TICK] PeriodicSONCheck(MASAC) - Step: " << m_stepCount
               << " | UE count: " << m_ueContexts.size() << std::endl;
 
-    if (m_useMADDPG)
+    if (m_baseline)
+    {
+        StepBaseline();
+        m_stepCount++;
+    }
+    else if (m_useMADDPG)
     {
         StepMASAC();
 
@@ -254,10 +304,15 @@ xAppHandoverSON_MASAC::CollectCellKpms()
     auto ueCountMap = ric->QueryKpmMetric("/KPM/DRB.UEActiveDl.QCI");
     for (auto& [endpoint, measurements] : ueCountMap)
     {
-        std::string mostRecentTimestamp("");
+        bool hasMostRecentTimestamp = false;
+        uint64_t mostRecentTimestamp = 0;
         for (auto& m : measurements)
         {
-            if (mostRecentTimestamp.empty()) mostRecentTimestamp = m.timestamp;
+            if (!hasMostRecentTimestamp)
+            {
+                mostRecentTimestamp = m.timestamp;
+                hasMostRecentTimestamp = true;
+            }
             if (mostRecentTimestamp != m.timestamp) continue;
             if (!m.measurements.contains("CELLID") || !m.measurements.contains("VALUE")) continue;
             uint16_t cellId = m.measurements["CELLID"];
@@ -274,10 +329,15 @@ xAppHandoverSON_MASAC::CollectCellKpms()
     auto txPwrMap = ric->QueryKpmMetric("/KPM/CARR.AvgTxPwr");
     for (auto& [endpoint, measurements] : txPwrMap)
     {
-        std::string mostRecentTimestamp("");
+        bool hasMostRecentTimestamp = false;
+        uint64_t mostRecentTimestamp = 0;
         for (auto& m : measurements)
         {
-            if (mostRecentTimestamp.empty()) mostRecentTimestamp = m.timestamp;
+            if (!hasMostRecentTimestamp)
+            {
+                mostRecentTimestamp = m.timestamp;
+                hasMostRecentTimestamp = true;
+            }
             if (mostRecentTimestamp != m.timestamp) continue;
             if (!m.measurements.contains("CELLID") || !m.measurements.contains("VALUE")) continue;
             uint16_t cellId = m.measurements["CELLID"];
@@ -661,11 +721,12 @@ xAppHandoverSON_MASAC::BuildObservation(uint16_t cellId)
         }
     }
     if (cqiCount > 0) avgCqi /= cqiCount;
-    obs[0] = avgCqi / 15.0f;
-    obs[1] = static_cast<float>(cell.totalThroughputDl / 1e3) / 5.0f;
-    obs[2] = (ueWithData > 0) ? static_cast<float>(edgeCount) / ueWithData : 0.0f;
-    uint32_t totalUEs = m_ueContexts.size();
-    obs[3] = (totalUEs > 0) ? static_cast<float>(cell.ueCount) / static_cast<float>(totalUEs) : 0.0f;
+    // FineBalancer-style local observation:
+    // [AvgCqi, DL Throughput (Mbps), FarUes, ServedUes]
+    obs[0] = avgCqi;
+    obs[1] = static_cast<float>(cell.totalThroughputDl / 1e3);
+    obs[2] = static_cast<float>(edgeCount);
+    obs[3] = static_cast<float>(cell.ueCount);
 
     return torch::from_blob(obs.data(), {OBS_DIM}, torch::kFloat32).clone();
 }
@@ -702,11 +763,9 @@ xAppHandoverSON_MASAC::ComputeRewards()
         prbUtils.push_back(cit != m_cellContexts.end() ? cit->second.prbUtilDl : 0.0);
     }
 
-    // Reward: global throughput with a small per-agent overload penalty.
-    double totalThp = std::accumulate(thps.begin(), thps.end(), 0.0);
-    double normalizedThp = totalThp / 2e4;  // scale to ~0-1 range
-
-    // UE std penalty: penalize uneven UE distribution across cells
+    // UE std logging only.
+    // Reward uses a scaled throughput term to keep SAC target/Q magnitudes
+    // closer to the entropy term and reduce action saturation at tanh bounds.
     double stdUeNorm = 0.0;
     if (totalUEs > 0) {
         double meanUe = totalUEs / ueCounts.size();
@@ -718,10 +777,12 @@ xAppHandoverSON_MASAC::ComputeRewards()
     std::vector<double> rewards;
     for (size_t i = 0; i < thps.size(); i++)
     {
+        constexpr double THROUGHPUT_REWARD_DIVISOR = 10.0;
         constexpr double OVERLOAD_KNEE_UE = 6.0;
-        constexpr double OVERLOAD_PENALTY = 0.1;
         double overload = std::max(0.0, ueCounts[i] - OVERLOAD_KNEE_UE) / OVERLOAD_KNEE_UE;
-        rewards.push_back(normalizedThp - OVERLOAD_PENALTY * overload);
+        double throughputMbps = thps[i] / 1e3;
+        double throughputReward = throughputMbps / THROUGHPUT_REWARD_DIVISOR;
+        rewards.push_back(throughputReward - m_rewardPenaltyWeight * overload);
     }
 
     // For logging
@@ -741,6 +802,70 @@ xAppHandoverSON_MASAC::ComputeRewards()
     }
 
     return rewards;
+}
+
+// =============================================================================
+// Baseline step: fixed CIO=0, TXP=32 dBm under the same MASAC scenario.
+// =============================================================================
+void
+xAppHandoverSON_MASAC::StepBaseline()
+{
+    NS_LOG_FUNCTION(this);
+
+    auto stepRewards = ComputeRewards();
+    E2AP* ric = (E2AP*)E2AP::RetrieveInstanceWithEndpoint("/E2Node/0");
+    if (!ric) return;
+
+    for (auto srcCellId : m_cellIds)
+    {
+        m_selfCio[srcCellId] = 0;
+
+        std::string ep = "/E2Node/" + std::to_string(srcCellId) + "/";
+        ric->E2SmRcSendTxPowerControlRequest(m_txPower, ep);
+
+        auto nit = m_neighborMap.find(srcCellId);
+        if (nit == m_neighborMap.end()) continue;
+
+        Json cioList = Json::array();
+        for (auto dstCellId : nit->second)
+        {
+            Json entry;
+            entry["CELL_ID"] = dstCellId;
+            entry["CIO_VALUE"] = 0;
+            cioList.push_back(entry);
+
+            if (m_stepCount % 5 == 0)
+            {
+                double now = Simulator::Now().GetSeconds();
+                std::ostringstream oss;
+                oss << now << "," << srcCellId << "," << dstCellId << ",0,0";
+                m_cioActionsBuf.push_back(oss.str());
+            }
+        }
+        ric->E2SmRcSendCioControlRequest(cioList, ep);
+
+        if (m_stepCount % 5 == 0)
+        {
+            double now = Simulator::Now().GetSeconds();
+            double cellThp = 0.0;
+            auto cellIt = m_cellContexts.find(srcCellId);
+            if (cellIt != m_cellContexts.end())
+                cellThp = cellIt->second.totalThroughputDl + cellIt->second.totalThroughputUl;
+
+            std::ostringstream oss;
+            oss << now << "," << srcCellId
+                << ",0,0,0," << m_txPower
+                << "," << cellThp << ",0";
+            m_maddpgActionsBuf.push_back(oss.str());
+        }
+    }
+
+    if (m_stepCount % 10 == 0 && stepRewards.size() == NUM_AGENTS)
+    {
+        NS_LOG_UNCOND("[BASELINE-MASAC] Step=" << m_stepCount
+            << " Rewards=[" << stepRewards[0] << ", "
+            << stepRewards[1] << ", " << stepRewards[2] << "]");
+    }
 }
 
 // =============================================================================
@@ -772,7 +897,6 @@ xAppHandoverSON_MASAC::StepMASAC()
             }
         }
 
-        uint32_t totalUEs = m_ueContexts.size();
         for (size_t i = 0; i < m_agents.size(); i++)
         {
             uint16_t cellId = m_agents[i]->GetConfig().cellId;
@@ -785,16 +909,10 @@ xAppHandoverSON_MASAC::StepMASAC()
             }
             const auto& co = cellObsMap[cellId];
             float avgCqi = (co.cqiCount > 0) ? co.sumCqi / co.cqiCount : 0.0f;
-            double totalUeCount = 0.0;
-            for (auto& [cid, cellCtx] : m_cellContexts) totalUeCount += cellCtx.ueCount;
-            obs[0] = avgCqi / 15.0f;
-            obs[1] = static_cast<float>(cellIt->second.totalThroughputDl / 1e3) / 5.0f;
-            obs[2] = (cellIt->second.ueCount > 0)
-                ? static_cast<float>(cellIt->second.edgeUeCount) / static_cast<float>(cellIt->second.ueCount)
-                : 0.0f;
-            obs[3] = (totalUeCount > 0.5)
-                ? static_cast<float>(cellIt->second.ueCount / totalUeCount)
-                : 0.0f;
+            obs[0] = avgCqi;
+            obs[1] = static_cast<float>(cellIt->second.totalThroughputDl / 1e3);
+            obs[2] = static_cast<float>(cellIt->second.edgeUeCount);
+            obs[3] = static_cast<float>(cellIt->second.ueCount);
             currentObs.push_back(torch::from_blob(obs.data(), {OBS_DIM}, torch::kFloat32).clone());
         }
     }
@@ -856,9 +974,14 @@ xAppHandoverSON_MASAC::StepMASAC()
         const auto& neighbors = m_agents[i]->GetConfig().neighborCellIds;
 
         // ── action[0]=selfCIO, action[1]=TXP ──
-        int selfCioDB = std::max(-5, std::min(5,
-            static_cast<int>(std::round(actData[0] * 5.0))));
-        m_selfCio[srcCell] = selfCioDB;
+        // CIO is applied in 0.5 dB IE units, so keep the policy output at that granularity.
+        int selfCioIe = std::max(-10, std::min(10,
+            static_cast<int>(std::round(actData[0] * 10.0))));
+        double selfCioDb = 0.5 * static_cast<double>(selfCioIe);
+        // User-facing logs use the opposite sign convention:
+        // positive = attract UEs, negative = push UEs away.
+        double displaySelfCioDb = -selfCioDb;
+        m_selfCio[srcCell] = selfCioIe;
 
         double txpOffset = static_cast<double>(actData[1]) * 4.0;
         double txpApplied = m_txPower + txpOffset;
@@ -874,7 +997,7 @@ xAppHandoverSON_MASAC::StepMASAC()
         std::cout << std::defaultfloat << std::setprecision(4);
         std::cout << "[ACT-MASAC] Step=" << m_stepCount
             << " Cell" << srcCell
-            << " selfCIO=" << selfCioDB << "dB"
+            << " selfCIO=" << displaySelfCioDb << "dB"
             << " TXP=" << txpApplied << "dBm raw=["
             << actData[0] << "," << actData[1] << "]" << std::endl;
         std::cout.flags(oldFmt);
@@ -893,7 +1016,7 @@ xAppHandoverSON_MASAC::StepMASAC()
             std::ostringstream oss;
             oss << now << "," << srcCell
                 << "," << actData[0] << "," << actData[1]
-                << "," << selfCioDB << "," << txpApplied
+                << "," << displaySelfCioDb << "," << txpApplied
                 << "," << cellThp << "," << alpha_val;
             m_maddpgActionsBuf.push_back(oss.str());
         }
@@ -905,16 +1028,19 @@ xAppHandoverSON_MASAC::StepMASAC()
         auto nit = m_neighborMap.find(srcCellId);
         if (nit == m_neighborMap.end()) continue;
 
-        int selfCio = 0;
+        int selfCioIe = 0;
         auto sit = m_selfCio.find(srcCellId);
-        if (sit != m_selfCio.end()) selfCio = sit->second;
+        if (sit != m_selfCio.end()) selfCioIe = sit->second;
+        double selfCioDb = 0.5 * static_cast<double>(selfCioIe);
+        int displaySelfCioIe = -selfCioIe;
+        double displaySelfCioDb = -selfCioDb;
 
         Json cioList = Json::array();
         for (auto dstCellId : nit->second)
         {
             Json entry;
             entry["CELL_ID"] = dstCellId;
-            entry["CIO_VALUE"] = selfCio * 2;  // IE units
+            entry["CIO_VALUE"] = selfCioIe;
             cioList.push_back(entry);
 
             if (m_stepCount % 5 == 0)
@@ -922,7 +1048,7 @@ xAppHandoverSON_MASAC::StepMASAC()
                 double now = Simulator::Now().GetSeconds();
                 std::ostringstream oss;
                 oss << now << "," << srcCellId << "," << dstCellId << ","
-                    << selfCio << "," << (selfCio * 2);
+                    << displaySelfCioDb << "," << displaySelfCioIe;
                 m_cioActionsBuf.push_back(oss.str());
             }
         }
@@ -1003,7 +1129,8 @@ xAppHandoverSON_MASAC::TrainMASAC()
         torch::NoGradGuard noGrad;
         for (int a = 0; a < NUM_AGENTS; a++)
         {
-            auto [act, logp] = m_agents[a]->GetActor()->sample(nextObsBatch[a]);
+            auto [act, logp] = m_agents[a]->GetActor()->sample(nextObsBatch[a],
+                                                               /*updateObsNorm=*/false);
             targetNextActs.push_back(act);
             targetNextLogProbs.push_back(logp);
         }
@@ -1122,6 +1249,8 @@ xAppHandoverSON_MASAC::SaveModels(const std::string& dir)
 {
     NS_LOG_FUNCTION(this);
 
+    if (m_baseline) return;
+
     if (!m_inferenceOnly)
     {
         std::string cmd = "mkdir -p " + dir;
@@ -1154,6 +1283,7 @@ void
 xAppHandoverSON_MASAC::LoadModels(const std::string& dir)
 {
     NS_LOG_FUNCTION(this);
+    if (m_baseline) return;
     std::cout << "[MASAC] Loading models..." << std::endl;
 
     for (size_t i = 0; i < m_agents.size(); i++)
@@ -1209,8 +1339,8 @@ xAppHandoverSON_MASAC::InitCsvLoggers()
     if (!(m_loadPretrained | m_inferenceOnly))
     {
         m_cellMetricsBuf.push_back("time_s,cellId,ueCount,edgeUeCount,cellDlThp_kbps,cellUlThp_kbps,avgCqi,txPower_dBm,prbUtilDl");
-        m_cioActionsBuf.push_back("time_s,srcCellId,neighborCellId,cioDB,cioIE");
-        m_maddpgActionsBuf.push_back("time_s,cellId,cioRaw,txpRaw,selfCioDB,txpApplied_dBm,cellThp_kbps,alpha");
+        m_cioActionsBuf.push_back("time_s,srcCellId,neighborCellId,cio_display_dB,cio_display_ie");
+        m_maddpgActionsBuf.push_back("time_s,cellId,cioRaw,txpRaw,selfCio_display_dB,txpApplied_dBm,cellThp_kbps,alpha");
         m_rewardCurveBuf.push_back("time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std,ue_std");
         m_stagnationBuf.push_back("time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant");
         m_trainDiagBuf.push_back("time_s,step,agent,buffer_size,critic_loss,actor_loss,alpha,target_q_mean,q1_mean,q2_mean,log_prob_mean,action_abs_mean,obs_mean,obs_std,obs_norm_mean,obs_norm_var");
@@ -1365,21 +1495,54 @@ xAppHandoverSON_MASAC::CheckAndLogStagnation(
 void
 xAppHandoverSON_MASAC::FlushCsvLogs()
 {
-    auto writeFile = [](const std::string& filename, const std::vector<std::string>& buf, bool append) {
+    auto writeFile = [](const std::string& filename,
+                        const std::string& header,
+                        const std::vector<std::string>& buf,
+                        bool append) {
         if (buf.empty()) return;
+        bool needsHeader = true;
+        if (append)
+        {
+            std::ifstream existing(filename, std::ios::ate);
+            needsHeader = (!existing.is_open() || existing.tellg() == 0);
+        }
+
         std::ofstream f(filename, append ? std::ios::app : std::ios::out);
-        for (const auto& line : buf)
-            f << line << "\n";
+        if (needsHeader && !header.empty())
+        {
+            f << header << "\n";
+        }
+        size_t startIdx = (needsHeader && !buf.empty() && buf.front() == header) ? 1 : 0;
+        for (size_t i = startIdx; i < buf.size(); ++i)
+            f << buf[i] << "\n";
         f.close();
     };
 
     bool append = (m_loadPretrained || m_inferenceOnly);
-    writeFile("cell_metrics.csv",     m_cellMetricsBuf,     append);
-    writeFile("cio_actions.csv",      m_cioActionsBuf,      append);
-    writeFile("maddpg_actions.csv",   m_maddpgActionsBuf,   append);
-    writeFile("reward_curve.csv",     m_rewardCurveBuf,     append);
-    writeFile("stagnation_check.csv", m_stagnationBuf,      append);
-    writeFile("train_diag.csv",       m_trainDiagBuf,       append);
+    writeFile("cell_metrics.csv",
+              "time_s,cellId,ueCount,edgeUeCount,cellDlThp_kbps,cellUlThp_kbps,avgCqi,txPower_dBm,prbUtilDl",
+              m_cellMetricsBuf,
+              append);
+    writeFile("cio_actions.csv",
+              "time_s,srcCellId,neighborCellId,cio_display_dB,cio_display_ie",
+              m_cioActionsBuf,
+              append);
+    writeFile("maddpg_actions.csv",
+              "time_s,cellId,cioRaw,txpRaw,selfCio_display_dB,txpApplied_dBm,cellThp_kbps,alpha",
+              m_maddpgActionsBuf,
+              append);
+    writeFile("reward_curve.csv",
+              "time_s,step,reward_cell1,reward_cell2,reward_cell3,prb_std,ue_std",
+              m_rewardCurveBuf,
+              append);
+    writeFile("stagnation_check.csv",
+              "time_s,step,cellId,cio_l2_change,max_cio_change,txp_raw_curr,txp_raw_prev,txp_raw_change,txp_dBm_curr,txp_dBm_prev,ue_count_prev,ue_count_curr,ue_count_change,reward_prev,reward_curr,reward_change,consecutive_stagnant_steps,cio_stagnant,txp_stagnant,is_stagnant",
+              m_stagnationBuf,
+              append);
+    writeFile("train_diag.csv",
+              "time_s,step,agent,buffer_size,critic_loss,actor_loss,alpha,target_q_mean,q1_mean,q2_mean,log_prob_mean,action_abs_mean,obs_mean,obs_std,obs_norm_mean,obs_norm_var",
+              m_trainDiagBuf,
+              append);
 
     NS_LOG_UNCOND("[MASAC] CSV logs flushed ("
         << m_cellMetricsBuf.size() << " cell_metrics, "

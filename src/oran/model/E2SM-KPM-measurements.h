@@ -7,7 +7,6 @@
 
 #include "ns3/event-id.h"
 #include "ns3/json.hpp"
-#include "ns3/system-wall-clock-timestamp.h"
 
 #include <deque>
 #include <map>
@@ -82,7 +81,7 @@ void from_json(const Json& j, MeasurementStruct& p);
  */
 typedef struct PeriodicMeasurementStruct_t
 {
-    std::string timestamp; ///< Timestamp from start of measurements
+    uint64_t timestamp;    ///< Measurement timestamp in simulation nanoseconds
     Json measurements;     ///< Measured value
 } PeriodicMeasurementStruct;
 
@@ -99,7 +98,7 @@ typedef struct PeriodicReportStruct_t
     uint32_t period_ms;              ///< Report period
     EventId eventId;                 ///< Event ID
     std::string subscriberEndpoint;  ///< Subscriber endpoint
-    std::string collectionStartTime; ///< Timestamp from the start of the reported period
+    uint64_t collectionStartTime;    ///< Collection start in simulation nanoseconds
     std::deque<PeriodicMeasurementStruct> measurements; ///< List of measurements in the report
 } PeriodicReportStruct;
 

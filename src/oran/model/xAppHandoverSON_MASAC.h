@@ -55,17 +55,17 @@ struct RunningMeanStd_MASAC : torch::nn::Module
         m_count = register_buffer("count", torch::zeros({1}));
     }
 
-    torch::Tensor normalize(torch::Tensor x)
+    torch::Tensor normalize(torch::Tensor x, bool updateStats = true)
     {
         // Update running stats only for batched inputs shaped like [B, feat].
         // Single observations arrive as [feat] during action selection.
-        if (is_training() && x.dim() >= 2 && x.size(0) > 1)
+        if (updateStats && is_training() && x.dim() >= 2 && x.size(0) > 1)
         {
             auto batchMean = x.mean(0);
             auto batchVar  = x.var(0, /*unbiased=*/false);
-            m_mean = (1.0 - m_alpha) * m_mean + m_alpha * batchMean.detach();
-            m_var  = (1.0 - m_alpha) * m_var  + m_alpha * batchVar.detach();
-            m_count += 1;
+            m_mean.copy_((1.0 - m_alpha) * m_mean + m_alpha * batchMean.detach());
+            m_var.copy_((1.0 - m_alpha) * m_var + m_alpha * batchVar.detach());
+            m_count.add_(1.0);
         }
         return (x - m_mean) / (m_var.sqrt() + 1e-8);
     }
@@ -99,9 +99,9 @@ struct SACActorNetImpl : torch::nn::Module
     }
 
     // Stochastic: reparameterization trick a = tanh(μ + σ*ε)
-    std::pair<torch::Tensor, torch::Tensor> sample(torch::Tensor obs)
+    std::pair<torch::Tensor, torch::Tensor> sample(torch::Tensor obs, bool updateObsNorm = true)
     {
-        auto x = obsNorm->normalize(obs);
+        auto x = obsNorm->normalize(obs, updateObsNorm);
         x = torch::leaky_relu(fc1->forward(x));
         x = torch::leaky_relu(fc2->forward(x));
         auto mu = fc_mean->forward(x);
@@ -121,9 +121,9 @@ struct SACActorNetImpl : torch::nn::Module
     }
 
     // Deterministic: tanh(μ)
-    torch::Tensor deterministic(torch::Tensor obs)
+    torch::Tensor deterministic(torch::Tensor obs, bool updateObsNorm = true)
     {
-        auto x = obsNorm->normalize(obs);
+        auto x = obsNorm->normalize(obs, updateObsNorm);
         x = torch::leaky_relu(fc1->forward(x));
         x = torch::leaky_relu(fc2->forward(x));
         return torch::tanh(fc_mean->forward(x));
@@ -295,7 +295,7 @@ class MASACAgent
         if (deterministic) {
             const bool wasTraining = m_actor->is_training();
             m_actor->eval();
-            auto act = m_actor->deterministic(obs);
+            auto act = m_actor->deterministic(obs, /*updateObsNorm=*/false);
             if (wasTraining)
             {
                 m_actor->train();
@@ -306,7 +306,7 @@ class MASACAgent
             }
             return act;
         }
-        auto [action, log_prob] = m_actor->sample(obs);
+        auto [action, log_prob] = m_actor->sample(obs, /*updateObsNorm=*/false);
         return action;
     }
 
@@ -364,7 +364,9 @@ class xAppHandoverSON_MASAC : public xAppHandover
             bool initiateHandovers = false,
             bool loadPretrained = false,
             bool inferenceOnly = false,
-            double simStopTime = 256.0);
+            double simStopTime = 256.0,
+            double rewardPenaltyWeight = 0.0,
+            bool baseline = false);
     void HandoverDecision(Json& payload) override;
 
     // 콜백
@@ -428,6 +430,7 @@ class xAppHandoverSON_MASAC : public xAppHandover
     double m_txPower;
     double m_frequency;
     double m_edgeRsrpThreshold;
+    double m_rewardPenaltyWeight;
     std::map<uint16_t, double> m_lastThroughputDl;
     std::map<uint16_t, double> m_lastThroughputUl;
     uint16_t m_dlBandwidthPrb;
@@ -450,6 +453,7 @@ private:
     bool m_useMADDPG = true;
     bool m_loadPretrained = false;
     bool m_inferenceOnly = false;
+    bool m_baseline = false;
 
     static constexpr int    NUM_AGENTS   = 3;
     static constexpr int    OBS_DIM      = 4;
@@ -476,13 +480,14 @@ private:
     std::map<uint16_t, std::vector<uint16_t>> m_neighborMap;
     uint32_t m_totalUEs = 40;
 
-    // Self CIO: m_selfCio[cellId] = CIO dB (동일 값이 모든 이웃에 적용)
+    // Self CIO: m_selfCio[cellId] = CIO IE units (0.5 dB per step)
     std::map<uint16_t, int> m_selfCio;
 
     // MASAC 함수
     void InitMASAC();
     torch::Tensor BuildObservation(uint16_t cellId);
     std::vector<double> ComputeRewards();
+    void StepBaseline();
     void StepMASAC();
     void TrainMASAC();
 

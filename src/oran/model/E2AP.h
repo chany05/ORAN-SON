@@ -10,7 +10,6 @@
 #include "PubSubInfra.h"
 
 #include "ns3/lte-enb-rrc.h"
-#include "ns3/system-wall-clock-timestamp.h"
 
 #include <optional>
 
@@ -95,6 +94,17 @@ class E2AP : public PubSubInfra
      * \param [in] endpoint The service endpoint being subscribed.
      */
     void SubscribeToEndpoint(std::string endpoint) override;
+    /**
+     * \brief Set the default subscription period used when the RIC auto-subscribes to KPMs.
+     *        A value of 0 enables event-driven reporting.
+     * \param [in] periodicity_ms Period in milliseconds.
+     */
+    void SetDefaultKpmSubscriptionPeriodMs(uint32_t periodicity_ms);
+    /**
+     * \brief Get the default subscription period used for KPM subscriptions.
+     * \return Period in milliseconds. 0 means event-driven reporting.
+     */
+    uint32_t GetDefaultKpmSubscriptionPeriodMs() const;
     /**
      * \brief Subscribe E2AP to multicasts from a given endpoint with
      * a interval trigger with a given periodicity
@@ -278,6 +288,11 @@ class E2AP : public PubSubInfra
      * \brief Pointer to the E2Node RRC. Used to forward control orders.
      */
     Ptr<LteEnbRrc> m_rrc;
+    /**
+     * \brief Default KPM indication period for auto-created subscriptions.
+     *        0 means event-driven immediate indication.
+     */
+    uint32_t m_defaultKpmSubscriptionPeriodMs{500};
 
   public:
     /**

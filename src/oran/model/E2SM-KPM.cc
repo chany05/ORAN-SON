@@ -32,15 +32,18 @@ E2AP::PeriodicReport(std::string subscriber_endpoint,
     SendPayload(RIC_INDICATION_MESSAGE);
 
     // Reschedule report event
-    EventId event = Simulator::Schedule(MilliSeconds(period_ms),
-                                        &E2AP::PeriodicReport,
-                                        this,
-                                        subscriber_endpoint,
-                                        period_ms,
-                                        subscribed_endpoint);
-    it->second.eventId = event;
+    if (period_ms > 0)
+    {
+        EventId event = Simulator::Schedule(MilliSeconds(period_ms),
+                                            &E2AP::PeriodicReport,
+                                            this,
+                                            subscriber_endpoint,
+                                            period_ms,
+                                            subscribed_endpoint);
+        it->second.eventId = event;
+    }
     it->second.measurements.clear();
-    it->second.collectionStartTime = SystemWallClockTimestamp().ToString();
+    it->second.collectionStartTime = GetSimulationTimestampNs();
 }
 
 void
@@ -54,12 +57,13 @@ E2AP::HandleE2SmKpmIndicationPayload(std::string& src_endpoint,
     switch (format)
     {
     case KPM_INDICATION_FORMAT_1: {
-        std::string ts = payload["COLLECTION START TIME"];
+        uint64_t ts = payload["COLLECTION START TIME"];
         std::string subscribed_endpoint = payload["MESSAGE"]["RAN FUNCTION"];
         std::string kpm =
             getSubEndpoint(src_endpoint,
                            subscribed_endpoint); // Remove endpointRoot from full KPM endpoint
         std::vector<PeriodicMeasurementStruct> measurements = payload["MESSAGE"]["MEASUREMENTS"];
+        (void)ts;
 
         auto kpmIt = m_kpmToEndpointStorage.find(kpm);
         if (kpmIt == m_kpmToEndpointStorage.end())

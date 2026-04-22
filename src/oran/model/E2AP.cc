@@ -10,6 +10,15 @@ using namespace oran;
 NS_LOG_COMPONENT_DEFINE("E2AP");
 std::map<uint16_t, Json> E2AP::s_cellInfoStorage;
 
+namespace
+{
+uint64_t
+GetSimulationTimestampNs()
+{
+    return static_cast<uint64_t>(Simulator::Now().GetNanoSeconds());
+}
+} // namespace
+
 Ptr<LteEnbRrc>
 E2AP::GetRrc()
 {
@@ -96,16 +105,20 @@ E2AP::HandlePayload(std::string src_endpoint, std::string dest_endpoint, Json pa
         }
 
         // Register event loop to send payload
-        EventId event = Simulator::Schedule(MilliSeconds(period),
-                                            &E2AP::PeriodicReport,
-                                            this,
-                                            src_endpoint,
-                                            period,
-                                            periodic_endpoint_to_report);
+        EventId event;
+        if (period > 0)
+        {
+            event = Simulator::Schedule(MilliSeconds(period),
+                                        &E2AP::PeriodicReport,
+                                        this,
+                                        src_endpoint,
+                                        period,
+                                        periodic_endpoint_to_report);
+        }
         PeriodicReportStruct entry{period,
                                    event,
                                    src_endpoint,
-                                   SystemWallClockTimestamp().ToString(),
+                                   GetSimulationTimestampNs(),
                                    {}};
         m_endpointPeriodicityAndBuffer.emplace(periodic_endpoint_to_report, entry);
 
@@ -531,7 +544,19 @@ E2AP::RemoveEndpoint(std::string endpoint)
 void
 E2AP::SubscribeToEndpoint(std::string endpoint)
 {
-    SubscribeToEndpointPeriodic(endpoint, 500);
+    SubscribeToEndpointPeriodic(endpoint, m_defaultKpmSubscriptionPeriodMs);
+}
+
+void
+E2AP::SetDefaultKpmSubscriptionPeriodMs(uint32_t periodicity_ms)
+{
+    m_defaultKpmSubscriptionPeriodMs = periodicity_ms;
+}
+
+uint32_t
+E2AP::GetDefaultKpmSubscriptionPeriodMs() const
+{
+    return m_defaultKpmSubscriptionPeriodMs;
 }
 
 void
@@ -591,8 +616,19 @@ E2AP::PublishToEndpointSubscribers(std::string endpoint, Json json)
         return;
     }
     auto periodicMeasurement =
-        PeriodicMeasurementStruct{SystemWallClockTimestamp().ToString(), json};
+        PeriodicMeasurementStruct{GetSimulationTimestampNs(), json};
     it->second.measurements.push_front(periodicMeasurement);
+    if (it->second.period_ms == 0)
+    {
+        if (!it->second.eventId.IsRunning())
+        {
+            it->second.eventId = Simulator::ScheduleNow(&E2AP::PeriodicReport,
+                                                        this,
+                                                        it->second.subscriberEndpoint,
+                                                        0,
+                                                        endpoint);
+        }
+    }
     /*
     NS_LOG_UNCOND("[E2AP] " << json["MEASID"] << " | RNTI=" << json["RNTI"] << " | CELLID=" << json["CELLID"]
                                  << " | ENDPOINT=" << kpm
@@ -824,7 +860,7 @@ E2AP::HandleE2SetupRequest(std::string& src_endpoint, Json& payload)
                     for (auto& kpmName : ranFunc["ENDPOINTS"])
                     {
                         std::string endpoint = src_endpoint + "/KPM/" + kpmName.get<std::string>();
-                        SubscribeToEndpointPeriodic(endpoint, 500);
+                        SubscribeToEndpointPeriodic(endpoint, m_defaultKpmSubscriptionPeriodMs);
                     }
                 }
                 acceptedList.push_back(funcId);

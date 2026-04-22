@@ -51,12 +51,14 @@ xAppHandoverMaxRsrq::ChooseTargetCellId(uint16_t rnti)
 
         for (auto& e2nodeMeasurements : metricMap)
         {
-            std::string mostRecentTimestamp("");
+            bool hasMostRecentTimestamp = false;
+            uint64_t mostRecentTimestamp = 0;
             for (auto& measurementDeque : e2nodeMeasurements.second)
             {
-                if (mostRecentTimestamp == "")
+                if (!hasMostRecentTimestamp)
                 {
                     mostRecentTimestamp = measurementDeque.timestamp;
+                    hasMostRecentTimestamp = true;
                 }
                 if (mostRecentTimestamp != measurementDeque.timestamp)
                 {

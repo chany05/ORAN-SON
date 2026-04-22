@@ -49,13 +49,14 @@ eNB (KPM) ──E2AP──> xApp (RL Agent)
 
 > **Note**: 현재 각 agent는 **자기 셀만** 관측합니다. 이웃 셀 부하를 모르므로 CIO 방향 결정에 한계가 있습니다. Centralized critic은 전체 관측(3x4=12D)을 보지만, actor는 로컬 4D만 입력받습니다. -> 이 부분을 어떻게 처리할지 결정이 필요해보임
 
-### Action Space (per agent, 3D)
+### Action Space (per agent, 2D)
 
 | Index | Action | Raw Range | Mapped Range |
 |-------|--------|-----------|-------------|
-| 0 | CIO → neighbor1 | [-1, 1] | round(raw × 5) → [-5, +5] dB |
-| 1 | CIO → neighbor2 | [-1, 1] | round(raw × 5) → [-5, +5] dB |
-| 2 | TxPower offset | [-1, 1] | base(32) + raw×4 → [26, 38] dBm |
+| 0 | Self CIO | [-1, 1] | round(raw × 5) → [-5, +5] dB |
+| 1 | TxPower offset | [-1, 1] | base(32) + raw×4 → [26, 38] dBm |
+
+> **Note**: 현재 구현은 neighbor별 CIO를 따로 출력하지 않습니다. 각 agent가 하나의 `selfCIO` 값을 내고, 이 값이 해당 셀의 모든 neighbor relation에 동일하게 적용됩니다.
 
 ### Network Architecture
 
@@ -64,8 +65,8 @@ eNB (KPM) ──E2AP──> xApp (RL Agent)
 obs(4D) → RunningMeanStd(EMA α=0.01)
         → Linear(4, 64) + LeakyReLU
         → Linear(64, 64) + LeakyReLU
-        ├→ fc_mean(64, 3)    → μ
-        └→ fc_logstd(64, 3)  → log σ (clamped [-20, 2])
+        ├→ fc_mean(64, 2)    → μ
+        └→ fc_logstd(64, 2)  → log σ (clamped [-20, 2])
 
 Stochastic:  a = tanh(μ + σ·ε),  ε ~ N(0,I)
 Deterministic: a = tanh(μ)
@@ -73,9 +74,9 @@ Deterministic: a = tanh(μ)
 
 **Twin Critic (TwinCriticNet)** — Centralized, global state + joint action
 ```
-input = cat(all_obs(12D), all_acts(9D)) = 21D
+input = cat(all_obs(12D), all_acts(6D)) = 18D
 
-Q1: Linear(21, 64) → LeakyReLU → Linear(64, 64) → LeakyReLU → Linear(64, 1)
+Q1: Linear(18, 64) → LeakyReLU → Linear(64, 64) → LeakyReLU → Linear(64, 1)
 Q2: (same structure, independent weights)
 
 Output: min(Q1, Q2)  — overestimation 방지
@@ -84,27 +85,27 @@ Output: min(Q1, Q2)  — overestimation 방지
 ### Reward Function
 
 ```
-totalThp = Σ (smoothed_DL_Thp + smoothed_UL_Thp)  per cell
-normalizedReward = totalThp / 20,000
+totalThp = Σ DL_Thp  per cell
+normalizedThp = totalThp / 20,000
 
-UE_STD_PENALTY = 0.5
-stdUeNorm = std(ueCount_per_cell) / totalUEs
+OVERLOAD_KNEE_UE = 6
+OVERLOAD_PENALTY = 0.1
+overload_i = max(0, ueCount_i - 6) / 6
 
-reward = normalizedThp - UE_STD_PENALTY × stdUeNorm
+reward_i = normalizedThp - OVERLOAD_PENALTY × overload_i
 ```
 
-모든 agent가 동일한 공유 보상을 받습니다 (cooperative).
+현재 구현은 cooperative shared reward가 아니라, 전체 DL throughput 보상에 셀별 overload penalty를 더한 per-agent reward를 사용합니다.
 
 ### Training Algorithm
 
 ```
-1. Collect transition → N-step buffer (N=3)
-2. Compute n-step return: R = Σ_{k=0}^{N-1} γ^k · r_k
-3. Push (obs_t, acts_t, R, obs_{t+N}, done) to replay buffer (100K)
-4. Sample batch (64) from replay buffer
-5. Per agent:
+1. Collect 1-step transition
+2. Push `(obs_t, acts_t, r_t, obs_{t+1}, done)` to replay buffer (100K)
+3. Sample batch (64) from replay buffer
+4. Per agent:
    a. Twin Critic update:
-      targetQ = R + γ^3 · (1-done) · (min(TQ1,TQ2) - α·log_π)
+      targetQ = r + γ · (1-done) · (min(TQ1,TQ2) - α·log_π)
       loss = MSE(Q1, targetQ) + MSE(Q2, targetQ)
    b. Actor update (entropy-regularized):
       loss = (α·log_π - min(Q1,Q2)).mean()
@@ -124,19 +125,18 @@ reward = normalizedThp - UE_STD_PENALTY × stdUeNorm
 | TAU | 0.005 | Soft update rate |
 | ACTOR_LR | 3e-4 | Actor learning rate |
 | CRITIC_LR | 3e-4 | Critic learning rate |
-| N_STEP | 3 | N-step returns |
-| EMA_ALPHA | 0.3 | Cell metrics smoothing |
-| H_target | -1.5 | Target entropy (-actDim/2) |
+| H_target | -1.0 | Target entropy |
 | Initial α | ~0.135 | exp(-2.0) |
 | SON Period | 1.0s | Decision interval |
-| Train Freq | Every 3 steps | = 3.0s |
+| Train Freq | Every step after warmup | `PeriodicSONCheck()`마다 호출 |
+| Warmup Steps | 200 | Replay buffer minimum before updates |
 
 ### Exploration
 
 SAC는 stochastic policy 자체가 exploration:
 - **학습**: reparameterized Gaussian + tanh (자동 exploration)
 - **추론**: deterministic tanh(μ) (exploitation only)
-- **Entropy temperature α**: 자동 조절 — H_target = -1.5에 수렴
+- **Entropy temperature α**: 자동 조절 — 현재 구현의 target entropy는 `-1.0`
 
 ---
 
@@ -206,7 +206,7 @@ MASAC 학습/추론 시나리오. 3셀 LTE 토폴로지에서 30 UE 부하 분�
 **CSV Outputs**:
 - `cell_metrics.csv` — 셀별 KPM (CQI, THP, PRB, UE count)
 - `cio_actions.csv` — CIO 결정 이력
-- `maddpg_actions.csv` — 에이전트 action 상세 (raw + mapped + alpha)
+- `maddpg_actions.csv` — MASAC action 상세 로그 파일명 (raw + mapped + alpha)
 - `reward_curve.csv` — 보상 곡선
 - `ue_trajectory.csv` — UE 위치/셀 이력
 
@@ -335,4 +335,3 @@ Simulation area: 50~950 × 50~950 m
 - LibTorch (PyTorch C++ API) at `$HOME/libs/libtorch`
 - C++17 compiler
 - (Optional) mlpack + armadillo for K-means baseline
-

@@ -186,26 +186,88 @@ UeStateTransition_MASAC(std::string context, uint64_t imsi, uint16_t cellId,
     }
 }
 
+void
+PublishServingCellMeasurements_MASAC(uint16_t rnti,
+                                     uint16_t measuredCellId,
+                                     double rsrp,
+                                     double rsrq,
+                                     bool servingCell,
+                                     uint8_t componentCarrierId)
+{
+    if (!servingCell || componentCarrierId != 0)
+    {
+        return;
+    }
+
+    std::string e2NodeEndpoint = "/E2Node/" + std::to_string(measuredCellId);
+    const E2AP* e2apConst =
+        dynamic_cast<const E2AP*>(E2AP::RetrieveInstanceWithEndpoint(e2NodeEndpoint));
+    if (!e2apConst)
+    {
+        return;
+    }
+    E2AP* e2ap = const_cast<E2AP*>(e2apConst);
+
+    Json json;
+    json["RNTI"] = rnti;
+    json["CELLID"] = measuredCellId;
+    json["VALUE"] = rsrp;
+    e2ap->PublishToEndpointSubscribers("/KPM/HO.SrcCellQual.RSRP", json);
+
+    json["VALUE"] = rsrq;
+    e2ap->PublishToEndpointSubscribers("/KPM/HO.SrcCellQual.RSRQ", json);
+}
+
 int
 main(int argc, char* argv[])
 {
     bool inferenceOnly  = false;
     bool loadPretrained = false;
     bool saturate       = false;
-    double simTime      = 256.0;
+    bool baseline       = false;
+    bool staticUes      = false;
+    double simTime      = 60.0;
+    double ueSpeed      = 3.0;
+    double sonPeriodSec = 0.5;
+    double rewardPenaltyWeight = 0.0;
     uint32_t rngRun     = 42;
+    uint32_t kpmPublishPeriodMs = 100;
+    uint32_t ricIndicationPeriodMs = 500;
+    uint32_t edgeMeasReportPeriodMs = 240;
     uint16_t numberOfUes = 30;
 
     CommandLine cmd;
     cmd.AddValue("inferenceOnly",  "Inference only (no training)", inferenceOnly);
     cmd.AddValue("loadPretrained", "Load pretrained models",       loadPretrained);
     cmd.AddValue("saturate",       "Saturate Cell1 with 30 UEs",   saturate);
+    cmd.AddValue("baseline",       "Baseline: fixed CIO=0, TXP=32 in MASAC scenario", baseline);
+    cmd.AddValue("staticUes",      "Disable UE mobility after random placement", staticUes);
     cmd.AddValue("simTime",        "Simulation duration (s)",       simTime);
+    cmd.AddValue("ueSpeed",        "UE speed for RandomDirection mobility (m/s)", ueSpeed);
+    cmd.AddValue("sonPeriodSec",   "SON decision period in seconds", sonPeriodSec);
+    cmd.AddValue("kpmPublishPeriodMs",
+                 "eNB-local KPM publish period in milliseconds",
+                 kpmPublishPeriodMs);
+    cmd.AddValue("ricIndicationPeriodMs",
+                 "RIC KPM indication period in milliseconds; 0 enables event-driven reporting",
+                 ricIndicationPeriodMs);
+    cmd.AddValue("edgeMeasReportPeriodMs",
+                 "Periodic UE measurement report interval for serving/neighbor quality (ms)",
+                 edgeMeasReportPeriodMs);
+    cmd.AddValue("rewardPenaltyWeight", "Overload penalty weight in reward units", rewardPenaltyWeight);
     cmd.AddValue("rngRun",         "RNG run number (same seed = same UE mobility)", rngRun);
     cmd.AddValue("numUes",         "Number of UEs",                numberOfUes);
     cmd.Parse(argc, argv);
 
-    if (inferenceOnly) loadPretrained = true;
+    if (baseline)
+    {
+        inferenceOnly = false;
+        loadPretrained = false;
+    }
+    else if (inferenceOnly)
+    {
+        loadPretrained = true;
+    }
 
     RngSeedManager::SetSeed(1);
     if (rngRun == 42)
@@ -222,15 +284,43 @@ main(int argc, char* argv[])
     std::cout << "  eNBs: " << numberOfEnbs << std::endl;
     std::cout << "  UEs: " << numberOfUes << std::endl;
     std::cout << "  SimTime: " << simTime << "s" << std::endl;
-    std::cout << "  SON Period: 0.5s, Train every 3 steps" << std::endl;
+    std::cout << "  SON Period: " << sonPeriodSec << "s, Train every step after warmup"
+              << std::endl;
+    std::cout << "  KPM Publish Period: " << kpmPublishPeriodMs << " ms" << std::endl;
+    std::cout << "  Edge Meas Report Period: " << edgeMeasReportPeriodMs << " ms" << std::endl;
+    std::cout << "  RIC Indication Period: ";
+    if (ricIndicationPeriodMs == 0)
+    {
+        std::cout << "event-driven";
+    }
+    else
+    {
+        std::cout << ricIndicationPeriodMs << " ms";
+    }
+    std::cout << std::endl;
     std::cout << "  InferenceOnly: " << (inferenceOnly ? "YES" : "NO") << std::endl;
     std::cout << "  LoadPretrained: " << (loadPretrained ? "YES" : "NO") << std::endl;
+    std::cout << "  Baseline: " << (baseline ? "YES (CIO=0, TXP=32)" : "NO") << std::endl;
     std::cout << "  Saturate: " << (saturate ? "YES (Cell1 heavy)" : "NO") << std::endl;
+    std::cout << "  StaticUEs: " << (staticUes ? "YES" : "NO") << std::endl;
+    std::cout << "  RewardPenaltyWeight: " << rewardPenaltyWeight << std::endl;
+    if (staticUes)
+    {
+        std::cout << "  UEMobility: ConstantPosition" << std::endl;
+    }
+    else
+    {
+        std::cout << "  UEMobility: RandomDirection2d (" << ueSpeed << " m/s)" << std::endl;
+    }
     std::cout << "=================================" << std::endl;
 
     Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(1)));
     Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(512));
     Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(0));
+    Config::SetDefault("ns3::LteEnbRrc::KpmPublishPeriodicity",
+                       TimeValue(MilliSeconds(kpmPublishPeriodMs)));
+    Config::SetDefault("ns3::LteUePhy::UeMeasurementsFilterPeriod",
+                       TimeValue(MilliSeconds(edgeMeasReportPeriodMs)));
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
     Config::SetDefault("ns3::LteEnbRrc::SrsPeriodicity", UintegerValue(80));
@@ -285,10 +375,11 @@ main(int argc, char* argv[])
     ueNodes.Create(numberOfUes);
 
     // ── 3셀 정삼각형 (중심 500,500) ──
-    // UE boundary is aligned with the triangle circumradius for a symmetric 3-cell region.
     const double areaCx = 500.0, areaCy = 500.0;
     const double enbRadius = 500.0 / std::sqrt(3.0);  // ISD 500m → 외접원 ~289m
-    const double ueRadius  = 500.0 / std::sqrt(3.0);  // Symmetric 3-cell UE boundary
+    const double ueSquareHalfSpan = 200.0;            // 400m x 400m square around incenter
+    const double ueMin = areaCx - ueSquareHalfSpan;
+    const double ueMax = areaCx + ueSquareHalfSpan;
     double enbX[3], enbY[3];
     for (int i = 0; i < 3; i++)
     {
@@ -309,7 +400,8 @@ main(int argc, char* argv[])
     for (int i = 0; i < 3; i++)
         std::cout << "Cell" << (i+1) << "=(" << std::fixed << std::setprecision(0)
                   << enbX[i] << "," << enbY[i] << ") ";
-    std::cout << "  UE radius=" << ueRadius << "m" << std::endl;
+    std::cout << "  UE square=" << (2.0 * ueSquareHalfSpan) << "x"
+              << (2.0 * ueSquareHalfSpan) << "m" << std::endl;
 
     MobilityHelper ueMobility;
     Ptr<ListPositionAllocator> ueAlloc = CreateObject<ListPositionAllocator>();
@@ -322,52 +414,62 @@ main(int argc, char* argv[])
 
     if (saturate)
     {
-        // ── saturate: Cell1(상단) 근처 가우시안 집중 ──
-        double sigma = 200.0;
+        // ── saturate: Cell1(상단) 근처 가우시안 집중, but constrained to the 400x400 square ──
+        double sigma = 120.0;
         std::cout << "[UE-DIST] Gaussian near Cell1 (" << enbX[0] << "," << enbY[0]
-                  << ") σ=" << sigma << "m (saturate)" << std::endl;
+                  << ") σ=" << sigma << "m inside 400x400 square (saturate)" << std::endl;
         
         for (uint16_t i = 0; i < numberOfUes; i++)
         {
             double x, y;
             do {
-                x = areaCx + nRng->GetValue() * sigma;
-                y = areaCy + nRng->GetValue() * sigma;
-            } while ((x - areaCx) * (x - areaCx) + (y - areaCy) * (y - areaCy)
-                     > ueRadius * ueRadius);
+                x = enbX[0] + nRng->GetValue() * sigma;
+                y = enbY[0] + nRng->GetValue() * sigma;
+            } while (x < ueMin || x > ueMax || y < ueMin || y > ueMax);
             ueAlloc->Add(Vector(x, y, 0));
         }
     }
     else
     {
-        // ── normal: 원형 영역 내 균등 랜덤 ──
-        std::cout << "[UE-DIST] Uniform circular (r=" << ueRadius << "m) (normal)" << std::endl;
+        // ── normal: 400x400 square centered at the triangle incenter ──
+        std::cout << "[UE-DIST] Uniform square 400x400 centered at (" << areaCx
+                  << "," << areaCy << ") (normal)" << std::endl;
 
         for (uint16_t i = 0; i < numberOfUes; i++)
         {
-            double x, y;
-            do {
-                x = areaCx + (uRng->GetValue() * 2.0 - 1.0) * ueRadius;
-                y = areaCy + (uRng->GetValue() * 2.0 - 1.0) * ueRadius;
-            } while ((x - areaCx) * (x - areaCx) + (y - areaCy) * (y - areaCy)
-                     > ueRadius * ueRadius);
+            double x = ueMin + uRng->GetValue() * (ueMax - ueMin);
+            double y = ueMin + uRng->GetValue() * (ueMax - ueMin);
             ueAlloc->Add(Vector(x, y, 0));
         }
     }
     ueMobility.SetPositionAllocator(ueAlloc);
 
-    // 이동 bounds: 원형 영역을 포함하는 사각형 (RandomDirection2d는 Rectangle만 지원)
-    double bMin = areaCx - ueRadius - 10.0;  // 140
-    double bMax = areaCx + ueRadius + 10.0;  // 860
-    ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
-        "Bounds", RectangleValue(Rectangle(bMin, bMax, bMin, bMax)),
-        "Speed", StringValue("ns3::ConstantRandomVariable[Constant=3]"),
-        "Pause", StringValue("ns3::ConstantRandomVariable[Constant=0.1]"));
+    if (staticUes)
+    {
+        ueMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    }
+    else
+    {
+        std::ostringstream speedModel;
+        speedModel << "ns3::ConstantRandomVariable[Constant=" << ueSpeed << "]";
+        ueMobility.SetMobilityModel("ns3::RandomDirection2dMobilityModel",
+            "Bounds", RectangleValue(Rectangle(ueMin, ueMax, ueMin, ueMax)),
+            "Speed", StringValue(speedModel.str()),
+            "Pause", StringValue("ns3::ConstantRandomVariable[Constant=0.1]"));
+    }
     ueMobility.Install(ueNodes);
 
     Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(enbTxPowerDbm));
     NetDeviceContainer enbLteDevs = lteHelper->InstallEnbDevice(enbNodes);
     NetDeviceContainer ueLteDevs = lteHelper->InstallUeDevice(ueNodes);
+    for (uint32_t i = 0; i < ueLteDevs.GetN(); ++i)
+    {
+        Ptr<LteUeNetDevice> ueDev = DynamicCast<LteUeNetDevice>(ueLteDevs.Get(i));
+        NS_ABORT_MSG_IF(!ueDev, "Failed to retrieve LteUeNetDevice for UE measurement trace");
+        ueDev->GetPhy()->TraceConnectWithoutContext(
+            "ReportUeMeasurements",
+            MakeCallback(&PublishServingCellMeasurements_MASAC));
+    }
 
     internet.Install(ueNodes);
     Ipv4InterfaceContainer ueIpIfaces;
@@ -471,8 +573,10 @@ main(int argc, char* argv[])
     // E2AP + MASAC xApp
     E2AP e2t;
     E2AP e2n1;
+    e2t.SetDefaultKpmSubscriptionPeriodMs(ricIndicationPeriodMs);
 
-    xAppHandoverSON_MASAC sonxapp(1.0, false, loadPretrained, inferenceOnly, simTime);
+    xAppHandoverSON_MASAC sonxapp(sonPeriodSec, false, loadPretrained, inferenceOnly, simTime,
+                                  rewardPenaltyWeight, baseline);
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
 

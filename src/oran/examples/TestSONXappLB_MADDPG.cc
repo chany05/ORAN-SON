@@ -193,8 +193,11 @@ main(int argc, char* argv[])
     bool loadPretrained = false;
     bool saturate       = false;
     bool baseline       = false;
-    double simTime      = 256.0;
+    double simTime      = 60.0;
+    double sonPeriodSec = 0.5;
     uint32_t rngRun     = 42;
+    uint32_t kpmPublishPeriodMs = 100;
+    uint32_t ricIndicationPeriodMs = 500;
     uint16_t numberOfUes = 30;
 
     CommandLine cmd;
@@ -202,6 +205,13 @@ main(int argc, char* argv[])
     cmd.AddValue("loadPretrained", "Load pretrained models",       loadPretrained);
     cmd.AddValue("saturate",       "Saturate Cell1 with 30 UEs",   saturate);
     cmd.AddValue("simTime",        "Simulation duration (s)",       simTime);
+    cmd.AddValue("sonPeriodSec",   "SON decision period in seconds", sonPeriodSec);
+    cmd.AddValue("kpmPublishPeriodMs",
+                 "eNB-local KPM publish period in milliseconds",
+                 kpmPublishPeriodMs);
+    cmd.AddValue("ricIndicationPeriodMs",
+                 "RIC KPM indication period in milliseconds; 0 enables event-driven reporting",
+                 ricIndicationPeriodMs);
     cmd.AddValue("baseline",       "Baseline: no MADDPG, CIO=0 TXP=32", baseline);
     cmd.AddValue("rngRun",         "RNG run number (same seed = same UE mobility)", rngRun);
     cmd.AddValue("numUes",         "Number of UEs",                numberOfUes);
@@ -223,7 +233,18 @@ main(int argc, char* argv[])
     std::cout << "  eNBs: " << numberOfEnbs << std::endl;
     std::cout << "  UEs: " << numberOfUes << std::endl;
     std::cout << "  SimTime: " << simTime << "s" << std::endl;
-    std::cout << "  SON Period: 0.5s" << std::endl;
+    std::cout << "  SON Period: " << sonPeriodSec << "s" << std::endl;
+    std::cout << "  KPM Publish Period: " << kpmPublishPeriodMs << " ms" << std::endl;
+    std::cout << "  RIC Indication Period: ";
+    if (ricIndicationPeriodMs == 0)
+    {
+        std::cout << "event-driven";
+    }
+    else
+    {
+        std::cout << ricIndicationPeriodMs << " ms";
+    }
+    std::cout << std::endl;
     std::cout << "  InferenceOnly: " << (inferenceOnly ? "YES" : "NO") << std::endl;
     std::cout << "  LoadPretrained: " << (loadPretrained ? "YES" : "NO") << std::endl;
     std::cout << "  Saturate: " << (saturate ? "YES (Cell1 heavy)" : "NO") << std::endl;
@@ -232,6 +253,8 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::UdpClient::Interval", TimeValue(MilliSeconds(20)));
     Config::SetDefault("ns3::UdpClient::PacketSize", UintegerValue(512));
     Config::SetDefault("ns3::UdpClient::MaxPackets", UintegerValue(0));
+    Config::SetDefault("ns3::LteEnbRrc::KpmPublishPeriodicity",
+                       TimeValue(MilliSeconds(kpmPublishPeriodMs)));
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
     Config::SetDefault("ns3::LteEnbRrc::SrsPeriodicity", UintegerValue(80));
@@ -468,8 +491,9 @@ main(int argc, char* argv[])
     // E2AP + MADDPG xApp
     E2AP e2t;
     E2AP e2n1;
+    e2t.SetDefaultKpmSubscriptionPeriodMs(ricIndicationPeriodMs);
 
-    xAppHandoverSON sonxapp(1.0, false, loadPretrained, inferenceOnly, simTime, baseline);
+    xAppHandoverSON sonxapp(sonPeriodSec, false, loadPretrained, inferenceOnly, simTime, baseline);
     sgw->AddApplication(&e2t);
     sgw->AddApplication(&sonxapp);
 
